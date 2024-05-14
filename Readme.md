@@ -1,5 +1,5 @@
 ## Introduction
-This web UI is for simple computational calculations with [Psi4](https://psicode.org/):
+This web UI is for simple computational chemistry calculations with [Psi4](https://psicode.org/):
 
 ***Single-Point Calculation***
 ![Screenshot 1](/images/webui1.png)
