@@ -15,21 +15,16 @@ This web UI is for simple computational chemistry calculations with [Psi4](https
 
 ## Installation
 You will need [Anaconda](https://www.anaconda.com/download) for this app.
-- Clone this repo:
+- Clone this repo: Open terminal
 
 ```
 git clone https://github.com/phatdatnguyen/psi4-webui
 ```
 
-- Open terminal:
-
-```
-cd psi4-webui
-```
-
 - Create and activate Anaconda environment:
 
 ```
+cd psi4-webui
 conda create -p ./psi4-env
 conda activate ./psi4-env
 ```
