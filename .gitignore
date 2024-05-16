@@ -3,3 +3,4 @@ psi4-env/
 structures/
 __pycache__/
 .vs/
+.clean

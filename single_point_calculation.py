@@ -15,6 +15,7 @@ def on_create_molecule(molecule_editor: molecule2d):
     os.makedirs(".\\structures", exist_ok=True)
     file_path = ".\\structures\\molecule.pdb"
     try:
+        global mol
         mol = Chem.MolFromSmiles(molecule_editor)
         mol = Chem.AddHs(mol)
         smiles = Chem.CanonSmiles(molecule_editor)
@@ -27,19 +28,25 @@ def on_create_molecule(molecule_editor: molecule2d):
     
     return smiles, file_path
 
-reps = [
-    {
-      "model": 0,
-      "chain": "",
-      "resname": "",
-      "style": "stick",
-      "color": "whiteCarbon",
-      "residue_range": "",
-      "around": 0,
-      "byres": False,
-      "visible": False
-    }
-]
+def on_upload_molecule(load_molecule_uploadbutton: gr.UploadButton):
+    file_path = load_molecule_uploadbutton
+    _, file_extension = os.path.splitext(file_path)
+    if file_extension.lower() != ".pdb":
+        gr.Warning("Invalid file!\nFile must be in .pdb format.")
+        return [None, None]
+
+    try:
+        global mol
+        mol = Chem.MolFromPDBFile(file_path, sanitize=False, removeHs=False)
+        smiles = Chem.CanonSmiles(Chem.MolToSmiles(mol))
+        AllChem.EmbedMolecule(mol)
+
+        Chem.MolToPDBFile(mol, file_path)    
+    except Exception as exc:
+        gr.Warning("Error!\n" + str(exc))
+        return [None, None]  
+    
+    return smiles, file_path
 
 def on_method_change(method_radio = gr.Radio):
     if method_radio == "Density Functional Theory":
@@ -52,15 +59,9 @@ def gaussian(x, mu, sigma, intensity):
 def on_single_point_calculate(method_radio: gr.Radio, reference_dropdown: gr.Dropdown, basis_set_dropdown: gr.Dropdown,
                               functional_textbox: gr.Textbox, charge_slider: gr.Slider, multiplicity_dropdown: gr.Dropdown,
                               memory_slider: gr.Slider, num_threads_slider: gr.Slider):
-    file_path = '.\\structures\\molecule.pdb'
     energy_textbox = "Not calculated"
     dipole_moment_textbox = "Not calculated"
     try:
-        # Load molecule
-        mol = Chem.MolFromPDBFile(file_path)
-        mol = Chem.AddHs(mol)
-        AllChem.EmbedMolecule(mol)
-
         # Set calculation options
         psi4.set_memory(memory_slider*1024*1024*1024)
         psi4.set_num_threads(num_threads_slider)
@@ -113,6 +114,20 @@ def on_single_point_calculate(method_radio: gr.Radio, reference_dropdown: gr.Dro
     calculation_status = "Calculation finished. ({0:.3f} s)".format(duration)
     return calculation_status, energy_textbox, dipole_moment_textbox, MO_df
 
+reps = [
+    {
+      "model": 0,
+      "chain": "",
+      "resname": "",
+      "style": "stick",
+      "color": "whiteCarbon",
+      "residue_range": "",
+      "around": 0,
+      "byres": False,
+      "visible": False
+    }
+]
+
 def single_point_calculation_tab_content():
     with gr.Tab("Single-Point Calculation") as single_point_calculation_tab:
         with gr.Accordion("Molecule"):
@@ -123,6 +138,7 @@ def single_point_calculation_tab_content():
                     create_molecule_button = gr.Button(value="Create molecule")
                     smiles_texbox = gr.Textbox(label="SMILES")
                     molecule_viewer = Molecule3D(label="Molecule", reps=reps)
+                    load_molecule_uploadbutton = gr.UploadButton(label="Load molecule")
         with gr.Accordion("Single-Point Calculation"):
             with gr.Row(equal_height=True):
                 with gr.Column(scale=1):
@@ -157,6 +173,7 @@ def single_point_calculation_tab_content():
                     MO_dataframe = gr.DataFrame(label="Molecular orbitals")
                 
         create_molecule_button.click(on_create_molecule, molecule_editor, [smiles_texbox, molecule_viewer])
+        load_molecule_uploadbutton.upload(on_upload_molecule, load_molecule_uploadbutton, [smiles_texbox, molecule_viewer])
         method_radio.change(on_method_change, method_radio, functional_textbox)
         calculate_button.click(on_single_point_calculate, [method_radio, reference_dropdown, basis_set_dropdown, functional_textbox,
                                                            charge_slider, multiplicity_dropdown, memory_slider, num_threads_slider],
