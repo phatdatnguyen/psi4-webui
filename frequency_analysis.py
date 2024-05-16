@@ -71,7 +71,7 @@ def on_run_geometry_optimization_change(run_geometry_optimization: gr.Checkbox):
 def lorentzian(wavenumber, position, intensity, width=10):
     return intensity * (width ** 2) / ((wavenumber - position) ** 2 + width ** 2)
 
-def on_frequency_analysis(method_radio: gr.Radio, reference_dropdown: gr.Dropdown, basis_set_dropdown: gr.Dropdown,
+def on_frequency_analysis(method_radio: gr.Radio, reference_dropdown: gr.Dropdown, temperature_slider: gr.Slider, pressure_slider: gr.Slider, basis_set_dropdown: gr.Dropdown,
                           functional_textbox: gr.Textbox, charge_slider: gr.Slider, multiplicity_dropdown: gr.Dropdown,
                           memory_slider: gr.Slider, num_threads_slider: gr.Slider, run_geometry_optimization_checkbox: gr.Checkbox,
                           iterations_slider: gr.Slider, step_type_dropdown: gr.Dropdown, full_hess_every_slider: gr.Slider,
@@ -88,6 +88,8 @@ def on_frequency_analysis(method_radio: gr.Radio, reference_dropdown: gr.Dropdow
         # Set calculation options
         psi4.set_memory(memory_slider*1024*1024*1024)
         psi4.set_num_threads(num_threads_slider)
+        psi4.set_options({"T": temperature_slider})
+        psi4.set_options({"P": pressure_slider*101325})
         psi4.set_options({"REFERENCE": reference_dropdown})
         psi4.set_options({"BASIS": basis_set_dropdown})
         psi4.set_options({"GEOM_MAXITER": iterations_slider})
@@ -198,10 +200,10 @@ def on_frequency_analysis(method_radio: gr.Radio, reference_dropdown: gr.Dropdow
                 </thead>
                 <tbody>
                     <tr><td>Zero-point potential energy</td><td>{:.4f} kcal/mol</td></tr>
-                    <tr><td>Thermal energy (295.15 K)</td><td>{:.4f} kcal/mol</td></tr>
-                    <tr><td>Enthalpy (295.15 K)</td><td>{:.4f} kcal/mol</td></tr>
-                    <tr><td>Entropy (295.15 K)</td><td>{:.4f} cal/(mol·K)</td></tr>
-                    <tr><td>Gibbs free energy (295.15 K)</td><td>{:.4f} kcal/mol</td></tr>
+                    <tr><td>Thermal energy</td><td>{:.4f} kcal/mol</td></tr>
+                    <tr><td>Enthalpy</td><td>{:.4f} kcal/mol</td></tr>
+                    <tr><td>Entropy</td><td>{:.4f} cal/(mol·K)</td></tr>
+                    <tr><td>Gibbs free energy</td><td>{:.4f} kcal/mol</td></tr>
                 </tbody>
             </table>
         </div>
@@ -235,6 +237,8 @@ def frequency_analysis_tab_content():
                 with gr.Column(scale=1):
                     method_radio = gr.Radio(label="Method", value="Hartree-Fock", choices=["Hartree-Fock", "Self-Consistent Field", "Density Functional Theory"])
                     reference_dropdown = gr.Dropdown(label="Reference", value="RHF", choices=["RHF", "UHF", "ROHF"])
+                    temperature_slider = gr.Slider(label="Temperature (K)", value=298.15, minimum=0, maximum=1000, step=0.01)
+                    pressure_slider = gr.Slider(label="Pressure (atm)", value=1, minimum=0, maximum=100, step=0.01)
                 with gr.Column(scale=1):
                     basis_set_dropdown = gr.Dropdown(label="Basis set",
                                                      value="STO-3G",
@@ -286,7 +290,7 @@ def frequency_analysis_tab_content():
         method_radio.change(on_method_change, method_radio, functional_textbox)
         run_geometry_optimization_checkbox.change(on_run_geometry_optimization_change, run_geometry_optimization_checkbox,
                                                   [iterations_slider, step_type_dropdown, full_hess_every_slider, convergence_dropdown])
-        frequency_analysis_button.click(on_frequency_analysis, [method_radio, reference_dropdown, basis_set_dropdown, functional_textbox,
+        frequency_analysis_button.click(on_frequency_analysis, [method_radio, reference_dropdown, temperature_slider, pressure_slider, basis_set_dropdown, functional_textbox,
                                                                charge_slider, multiplicity_dropdown, memory_slider, num_threads_slider,
                                                                run_geometry_optimization_checkbox, iterations_slider, step_type_dropdown, full_hess_every_slider, convergence_dropdown],
                                                                [status_markdown, energy_plot, conformer_dropdown, conformers_viewer,
