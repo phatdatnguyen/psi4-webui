@@ -15,6 +15,7 @@ def on_create_molecule(molecule_editor: molecule2d):
     os.makedirs(".\\structures", exist_ok=True)
     file_path = ".\\structures\\molecule.pdb"
     try:
+        global mol
         mol = Chem.MolFromSmiles(molecule_editor)
         mol = Chem.AddHs(mol)
         smiles = Chem.CanonSmiles(molecule_editor)
@@ -284,9 +285,9 @@ def frequency_analysis_tab_content():
             with gr.Row(equal_height=True):
                 status_markdown = gr.Markdown()
             with gr.Row(equal_height=True):
-                with gr.Column(scale=1):
-                    energy_plot = gr.Plot(label="Energy plot")
                 with gr.Column(scale=2):
+                    energy_plot = gr.Plot(label="Energy plot")
+                with gr.Column(scale=1):
                     conformer_dropdown = gr.Dropdown(label="Conformer", visible=False)
                     conformers_viewer = Molecule3D(label="Conformer", reps=reps)  
             with gr.Row(equal_height=True):        

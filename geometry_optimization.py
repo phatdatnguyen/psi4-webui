@@ -15,6 +15,7 @@ def on_create_molecule(molecule_editor: molecule2d):
     os.makedirs(".\\structures", exist_ok=True)
     file_path = ".\\structures\\molecule.pdb"
     try:
+        global mol
         mol = Chem.MolFromSmiles(molecule_editor)
         mol = Chem.AddHs(mol)
         smiles = Chem.CanonSmiles(molecule_editor)
