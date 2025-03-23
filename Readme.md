@@ -25,7 +25,7 @@ git clone https://github.com/phatdatnguyen/psi4-webui
 
 ```
 cd psi4-webui
-conda create -p ./psi4-env
+conda create -p ./psi4-env python=3.12
 conda activate ./psi4-env
 ```
 
@@ -34,6 +34,7 @@ conda activate ./psi4-env
 ```
 conda install conda-forge::rdkit
 conda install psi4 -c conda-forge/label/libint_dev -c conda-forge
+pip install nglview
 pip install gradio
 pip install gradio_molecule2d
 pip install gradio_molecule3d

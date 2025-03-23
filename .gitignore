@@ -4,3 +4,7 @@ structures/
 __pycache__/
 .vs/
 .clean
+
+*.xyz
+*.pdb
+*.clean
