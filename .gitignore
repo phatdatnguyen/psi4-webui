@@ -8,3 +8,5 @@ __pycache__/
 *.xyz
 *.pdb
 *.clean
+*.cube
+*.html

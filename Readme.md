@@ -34,10 +34,9 @@ conda activate ./psi4-env
 ```
 conda install conda-forge::rdkit
 conda install psi4 -c conda-forge/label/libint_dev -c conda-forge
-pip install nglview
 pip install gradio
 pip install gradio_molecule2d
-pip install gradio_molecule3d
+pip install nglview
 ```
 
 ## Start web UI
