@@ -1,3 +1,5 @@
+import os
+import glob
 import gradio as gr
 from single_point_calculation import single_point_calculation_tab_content
 from geometry_optimization import geometry_optimization_tab_content
@@ -7,6 +9,18 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import socket
+
+# clean up the directory
+for filepath in glob.iglob('./*.clean'):
+    os.remove(filepath)
+for filepath in glob.iglob('./static/**/*.cube', recursive=True):
+    os.remove(filepath)
+for filepath in glob.iglob('./static/**/*.xyz', recursive=True):
+    os.remove(filepath)
+for filepath in glob.iglob('./static/*.html'):
+    os.remove(filepath)
+for filepath in glob.iglob('./static/**/*.html', recursive=True):
+    os.remove(filepath)
 
 # create a FastAPI app
 app = FastAPI()
