@@ -32,11 +32,11 @@ conda activate ./psi4-env
 - Install packages:
 
 ```
-conda install conda-forge::rdkit
+pip install rdkit
 conda install psi4 -c conda-forge/label/libint_dev -c conda-forge
+pip install nglview
 pip install gradio
 pip install gradio_molecule2d
-pip install nglview
 ```
 
 ## Start web UI
@@ -44,6 +44,5 @@ To start the web UI:
 
 ```
 conda activate ./psi4-env
-set PYTHONUTF8=1
 python webui.py
 ```
