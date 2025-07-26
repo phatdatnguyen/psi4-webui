@@ -10,3 +10,4 @@ __pycache__/
 *.clean
 *.cube
 *.html
+*.dat

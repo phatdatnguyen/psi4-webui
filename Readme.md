@@ -35,8 +35,9 @@ conda activate ./psi4-env
 pip install rdkit
 conda install psi4 -c conda-forge/label/libint_dev -c conda-forge
 pip install nglview
-pip install gradio
 pip install gradio_molecule2d
+pip uninstall gradio
+pip install gradio==5.29.1
 ```
 
 ## Start web UI
@@ -46,3 +47,5 @@ To start the web UI:
 conda activate ./psi4-env
 python webui.py
 ```
+
+or run `start_webui.bat`
