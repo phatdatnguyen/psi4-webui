@@ -96,3 +96,141 @@ Module                                       User      System        Wall       
 --------------------------------------------------------------------------------------
 
 **************************************************************************************
+
+Host: DatNguyenPC
+
+Timers On : Sun Jul 20 21:15:04 2025
+Timers Off: Sun Jul 20 21:15:05 2025
+
+Wall Time:        0.45 seconds
+
+                                                       Time (seconds)
+Module                                       User      System        Wall        Calls
+
+--------------------------------------------------------------------------------------
+
+**************************************************************************************
+
+Host: DatNguyenPC
+
+Timers On : Mon Jul 21 18:31:34 2025
+Timers Off: Mon Jul 21 18:32:21 2025
+
+Wall Time:       46.67 seconds
+
+                                                       Time (seconds)
+Module                                       User      System        Wall        Calls
+Total PK formation time             :      0.000u      0.000s      0.056w      1 calls
+Libint2ERI::Libint2ERI              :      0.000u      0.000s      0.038w     17 calls
+HF: Form core H                     :      0.000u      0.000s      0.009w      1 calls
+HF: Form S/X                        :      0.000u      0.000s      0.004w      1 calls
+HF: Guess                           :      0.000u      0.000s      0.141w      1 calls
+SAD Guess                           :      0.000u      0.000s      0.138w      1 calls
+HF: Form G                          :      0.000u      0.000s      0.001w      8 calls
+JK: D                               :      0.000u      0.000s      0.000w      8 calls
+JK: USO2AO                          :      0.000u      0.000s      0.000w      8 calls
+JK: JK                              :      0.000u      0.000s      0.000w      8 calls
+PK computes JK                      :      0.000u      0.000s      0.000w      8 calls
+JK: AO2USO                          :      0.000u      0.000s      0.000w      8 calls
+HF: Form F                          :      0.000u      0.000s      0.001w      8 calls
+HF: Form D                          :      0.000u      0.000s      0.000w      8 calls
+HF: DIIS                            :      0.000u      0.000s      1.352w      7 calls
+HF: Form C                          :      0.000u      0.000s      0.002w      7 calls
+
+--------------------------------------------------------------------------------------
+Total PK formation time             :      0.000u      0.000s      0.056w      1 calls
+| Libint2ERI::Libint2ERI            :      0.000u      0.000s      0.038w     17 calls
+HF: Form core H                     :      0.000u      0.000s      0.009w      1 calls
+HF: Form S/X                        :      0.000u      0.000s      0.004w      1 calls
+HF: Guess                           :      0.000u      0.000s      0.141w      1 calls
+| SAD Guess                         :      0.000u      0.000s      0.138w      1 calls
+HF: Form G                          :      0.000u      0.000s      0.001w      8 calls
+| JK: D                             :      0.000u      0.000s      0.000w      8 calls
+| JK: USO2AO                        :      0.000u      0.000s      0.000w      8 calls
+| JK: JK                            :      0.000u      0.000s      0.000w      8 calls
+| | PK computes JK                  :      0.000u      0.000s      0.000w      8 calls
+| JK: AO2USO                        :      0.000u      0.000s      0.000w      8 calls
+HF: Form F                          :      0.000u      0.000s      0.001w      8 calls
+HF: Form D                          :      0.000u      0.000s      0.000w      8 calls
+HF: DIIS                            :      0.000u      0.000s      1.352w      7 calls
+HF: Form C                          :      0.000u      0.000s      0.002w      7 calls
+
+**************************************************************************************
+
+Host: DatNguyenPC
+
+Timers On : Thu Aug  7 09:14:17 2025
+Timers Off: Thu Aug  7 09:35:35 2025
+
+Wall Time:     1277.55 seconds
+
+                                                       Time (seconds)
+Module                                       User      System        Wall        Calls
+Total PK formation time             :      0.000u      0.000s      0.074w      2 calls
+Libint2ERI::Libint2ERI              :      0.000u      0.000s      0.042w     52 calls
+HF: Form core H                     :      0.000u      0.000s      0.025w      3 calls
+HF: Form S/X                        :      0.000u      0.000s      0.002w      3 calls
+HF: Guess                           :      0.000u      0.000s      0.459w      3 calls
+SAD Guess                           :      0.000u      0.000s      0.457w      3 calls
+HF: Form G                          :      0.000u      0.000s      1.279w     25 calls
+JK: D                               :      0.000u      0.000s      0.000w     25 calls
+JK: USO2AO                          :      0.000u      0.000s      0.000w     25 calls
+JK: JK                              :      0.000u      0.000s      0.142w     25 calls
+PK computes JK                      :      0.000u      0.000s      0.001w     16 calls
+DFH: compute_JK()                   :      0.000u      0.000s      0.141w      9 calls
+DFH: Grabbing AOs                   :      0.000u      0.000s      0.000w      9 calls
+DFH: compute_J                      :      0.000u      0.000s      0.007w      9 calls
+DFH: compute_K                      :      0.000u      0.000s      0.128w      9 calls
+JK: AO2USO                          :      0.000u      0.000s      0.000w     25 calls
+RV: Form V                          :      0.000u      0.000s      1.132w      9 calls
+Properties                          :      2.924p                          13392 calls
+Functional                          :      4.648p                          13392 calls
+V_xc                                :      3.539p                          13392 calls
+HF: Form F                          :      0.000u      0.000s      0.006w     25 calls
+HF: Form D                          :      0.000u      0.000s      0.000w     25 calls
+HF: DIIS                            :      0.000u      0.000s      1.048w     22 calls
+HF: Form C                          :      0.000u      0.000s      0.007w     22 calls
+V: Grid                             :      0.000u      0.000s      0.074w      1 calls
+build grid                          :      0.000u      0.000s      0.040w      1 calls
+post-process grid                   :      0.000u      0.000s      0.034w      1 calls
+DFH: sparsity prep                  :      0.000u      0.000s      0.005w      1 calls
+DFH: initialize()                   :      0.000u      0.000s      0.064w      1 calls
+DFH: AO Construction                :      0.000u      0.000s      0.003w      1 calls
+DFH: AO-Met. Contraction            :      0.000u      0.000s      0.002w      1 calls
+
+--------------------------------------------------------------------------------------
+Total PK formation time             :      0.000u      0.000s      0.074w      2 calls
+| Libint2ERI::Libint2ERI            :      0.000u      0.000s      0.034w     34 calls
+HF: Form core H                     :      0.000u      0.000s      0.025w      3 calls
+HF: Form S/X                        :      0.000u      0.000s      0.002w      3 calls
+HF: Guess                           :      0.000u      0.000s      0.459w      3 calls
+| SAD Guess                         :      0.000u      0.000s      0.457w      3 calls
+HF: Form G                          :      0.000u      0.000s      1.279w     25 calls
+| JK: D                             :      0.000u      0.000s      0.000w     25 calls
+| JK: USO2AO                        :      0.000u      0.000s      0.000w     25 calls
+| JK: JK                            :      0.000u      0.000s      0.142w     25 calls
+| | PK computes JK                  :      0.000u      0.000s      0.001w     16 calls
+| | DFH: compute_JK()               :      0.000u      0.000s      0.141w      9 calls
+| | | DFH: Grabbing AOs             :      0.000u      0.000s      0.000w      9 calls
+| | | DFH: compute_J                :      0.000u      0.000s      0.007w      9 calls
+| | | DFH: compute_K                :      0.000u      0.000s      0.128w      9 calls
+| JK: AO2USO                        :      0.000u      0.000s      0.000w     25 calls
+| RV: Form V                        :      0.000u      0.000s      1.132w      9 calls
+| | Properties                      :      2.924p                          13392 calls
+| | Functional                      :      4.648p                          13392 calls
+| | V_xc                            :      3.539p                          13392 calls
+HF: Form F                          :      0.000u      0.000s      0.006w     25 calls
+HF: Form D                          :      0.000u      0.000s      0.000w     25 calls
+HF: DIIS                            :      0.000u      0.000s      1.048w     22 calls
+HF: Form C                          :      0.000u      0.000s      0.007w     22 calls
+V: Grid                             :      0.000u      0.000s      0.074w      1 calls
+| build grid                        :      0.000u      0.000s      0.040w      1 calls
+| post-process grid                 :      0.000u      0.000s      0.034w      1 calls
+DFH: sparsity prep                  :      0.000u      0.000s      0.005w      1 calls
+| Libint2ERI::Libint2ERI            :      0.000u      0.000s      0.004w      1 calls
+DFH: initialize()                   :      0.000u      0.000s      0.064w      1 calls
+| Libint2ERI::Libint2ERI            :      0.000u      0.000s      0.004w     17 calls
+| DFH: AO Construction              :      0.000u      0.000s      0.003w      1 calls
+| DFH: AO-Met. Contraction          :      0.000u      0.000s      0.002w      1 calls
+
+**************************************************************************************

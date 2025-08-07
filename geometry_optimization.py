@@ -18,27 +18,23 @@ def on_create_molecule(molecule_editor: molecule2d):
     try:
         global mol
         mol = Chem.MolFromSmiles(molecule_editor)
+        if mol is None:
+            raise ValueError("Invalid SMILES string.")
+        smiles = Chem.MolToSmiles(mol, canonical=True)
         mol = Chem.AddHs(mol)
-        smiles = Chem.CanonSmiles(molecule_editor)
-        AllChem.EmbedMolecule(mol)
-
+        AllChem.EmbedMolecule(mol, randomSeed=0xf00d)
         Chem.MolToPDBFile(mol, file_path)
 
-        # Create the NGL view widget
+        # Create the NGL view widget and write to HTML
         view = nglview.show_rdkit(mol)
-        
-        # Write the widget to HTML
-        if os.path.exists('./static/molecule_opt.html'):
-            os.remove('./static/molecule_opt.html')
         nglview.write_html('./static/molecule_opt.html', [view])
 
-        # Read the HTML file
+        # Prepare iframe HTML
         timestamp = int(time.time())
         html = f'<iframe src="/static/molecule_opt.html?ts={timestamp}" height="300" width="400" title="NGL View"></iframe>'
     except Exception as exc:
-        gr.Warning("Error!\n" + str(exc))
-        return [None, None, None]
-    
+        gr.Warning(f"Error creating molecule!\n{exc}")
+        return None, None, None
     return smiles, html, gr.update(interactive=True)
 
 def on_upload_molecule(load_molecule_uploadbutton: gr.UploadButton):
@@ -46,31 +42,27 @@ def on_upload_molecule(load_molecule_uploadbutton: gr.UploadButton):
     _, file_extension = os.path.splitext(file_path)
     if file_extension.lower() != ".pdb":
         gr.Warning("Invalid file!\nFile must be in .pdb format.")
-        return [None, None, None]
+        return None, None, None
 
     try:
         global mol
         mol = Chem.MolFromPDBFile(file_path, sanitize=False, removeHs=False)
-        smiles = Chem.CanonSmiles(Chem.MolToSmiles(mol))
-        AllChem.EmbedMolecule(mol)
-
+        if mol is None:
+            raise ValueError("Invalid PDB file.")
+        smiles = Chem.MolToSmiles(mol, canonical=True)
+        AllChem.EmbedMolecule(mol, randomSeed=0xf00d)
         Chem.MolToPDBFile(mol, file_path)
 
-        # Create the NGL view widget
+        # Create the NGL view widget and write to HTML
         view = nglview.show_rdkit(mol)
-        
-        # Write the widget to HTML
-        if os.path.exists('./static/molecule_opt.html'):
-            os.remove('./static/molecule_opt.html')
         nglview.write_html('./static/molecule_opt.html', [view])
 
-        # Read the HTML file
+        # Prepare iframe HTML
         timestamp = int(time.time())
         html = f'<iframe src="/static/molecule_opt.html?ts={timestamp}" height="300" width="400" title="NGL View"></iframe>'
     except Exception as exc:
-        gr.Warning("Error!\n" + str(exc))
-        return [None, None, None]  
-    
+        gr.Warning(f"Error loading molecule!\n{exc}")
+        return None, None, None
     return smiles, html, gr.update(interactive=True)
 
 def on_method_change(method_radio: gr.Radio):
@@ -86,24 +78,23 @@ def on_optimizer_geometry(method_radio: gr.Radio, reference_dropdown: gr.Dropdow
     dipole_moment_textbox = "Not calculated"
     try:
         # Set calculation options
-        psi4.set_memory(memory_slider*1024*1024*1024)
+        psi4.set_memory(memory_slider * 1024 * 1024 * 1024)
         psi4.set_num_threads(num_threads_slider)
-        psi4.set_options({"REFERENCE": reference_dropdown})
-        psi4.set_options({"BASIS": basis_set_dropdown})
-        psi4.set_options({"GEOM_MAXITER": iterations_slider})
-        psi4.set_options({"STEP_TYPE": step_type_dropdown})
-        psi4.set_options({"FULL_HESS_EVERY": full_hess_every_slider})
-        psi4.set_options({"G_CONVERGENCE": convergence_dropdown})
+        psi4.set_options({
+            "REFERENCE": reference_dropdown,
+            "BASIS": basis_set_dropdown,
+            "GEOM_MAXITER": iterations_slider,
+            "STEP_TYPE": step_type_dropdown,
+            "FULL_HESS_EVERY": full_hess_every_slider,
+            "G_CONVERGENCE": convergence_dropdown
+        })
 
         # Write the geometry to XYZ string
         xyz_string = generate_xyz_string(mol, charge_slider, multiplicity_dropdown)
-
-        # Get the psi4 geometry
         geometry = psi4.geometry(xyz_string)
 
         # Run calculation
         start = time.time()
-
         global wfn
         if method_radio == "Hartree-Fock":
             psi4.set_options({"SCF_TYPE": "PK"})
@@ -114,9 +105,7 @@ def on_optimizer_geometry(method_radio: gr.Radio, reference_dropdown: gr.Dropdow
         else:
             psi4.set_options({"SCF_TYPE": "DF"})
             energy, wfn, history = psi4.optimize(functional_textbox, molecule=geometry, optking__geom_maxiter=iterations_slider, return_wfn=True, return_history=True)
-
-        end = time.time()
-        duration = end - start
+        duration = time.time() - start
 
         # Get results
         energy_values = history['energy']
@@ -128,52 +117,46 @@ def on_optimizer_geometry(method_radio: gr.Radio, reference_dropdown: gr.Dropdow
 
         coordinates_list = history['coordinates']
         num_confs = len(coordinates_list)
+        conformers_file_path = None
         for conformer_idx, coordinates in enumerate(coordinates_list):
             conf = mol.GetConformer()
             for i, coord in enumerate(coordinates):
                 conf.SetAtomPosition(i, coord)
             conformers_file_path = f"./structures/opt_conformer{conformer_idx}.pdb"
             Chem.MolToPDBFile(mol, conformers_file_path)
-        conformer_dropdown = gr.Dropdown(label="Conformer", value=num_confs-1, choices=list(range(0, num_confs)), visible=True)
+        conformer_dropdown = gr.Dropdown(label="Conformer", value=num_confs-1, choices=list(range(num_confs)), visible=True)
 
-        energy = energy * psi4.constants.hartree2kcalmol
-        energy_textbox = "{:.4f} (kcal/mol)".format(energy)
+        energy_kcal = energy * psi4.constants.hartree2kcalmol
+        energy_textbox = f"{energy_kcal:.4f} (kcal/mol)"
         dipole_moment = wfn.variable("CURRENT DIPOLE")
-        dipole_moment_textbox = "{:.4f} (Debye)".format(np.linalg.norm(dipole_moment))
+        dipole_moment_textbox = f"{np.linalg.norm(dipole_moment):.4f} (Debye)"
 
         MO_energies = wfn.epsilon_a_subset("AO", "ALL").to_array()
-        visualization_dropdown_choices=["Electron density"]
-        MO_df = pd.DataFrame(columns=["Molecular orbital", "Energy (kcal/mol)"])
-        for i, MO_energy in enumerate(MO_energies):
-            MO_energy = MO_energy * psi4.constants.hartree2kcalmol
-            MO_name = f"MO {i+1}"
-            MO_df = MO_df._append({"Molecular orbital": MO_name, "Energy (kcal/mol)": "{:.4f}".format(MO_energy)}, ignore_index=True)
-            visualization_dropdown_choices.append(MO_name)
+        visualization_dropdown_choices = ["Electron density"]
+        MO_df = pd.DataFrame({
+            "Molecular orbital": [f"MO {i+1}" for i in range(len(MO_energies))],
+            "Energy (kcal/mol)": [f"{(e * psi4.constants.hartree2kcalmol):.4f}" for e in MO_energies]
+        })
+        visualization_dropdown_choices.extend(MO_df["Molecular orbital"].tolist())
         visualization_dropdown = gr.Dropdown(label="Visualization", value="Electron density", choices=visualization_dropdown_choices)
     except Exception as exc:
-        gr.Warning("Optimization error!\n" + str(exc))
-        return [None, None, None, None, None, None, None, None, None, None]
+        gr.Warning(f"Optimization error!\n{exc}")
+        return None, None, None, None, None, None, None, None, None, None
 
-    calculation_status = "Optimization complete. ({0:.3f} s)".format(duration)
+    calculation_status = f"Optimization complete. ({duration:.3f} s)"
     return calculation_status, energy_plot, conformer_dropdown, conformers_file_path, energy_textbox, dipole_moment_textbox, visualization_dropdown, gr.update(interactive=True), "", MO_df
 
 def on_conformer_change(conformer_dropdown: gr.Dropdown):
     conformers_file_path = f"./structures/opt_conformer{conformer_dropdown}.pdb"
-
-    Chem.MolToPDBFile(mol, conformers_file_path)
-
-    # Create the NGL view widget
-    view = nglview.show_rdkit(mol)
-    
-    # Write the widget to HTML
-    if os.path.exists('./static/opt_conformer.html'):
-        os.remove('./static/opt_conformer.html')
-    nglview.write_html('./static/opt_conformer.html', [view])
-
-    # Read the HTML file
-    timestamp = int(time.time())
-    html = f'<iframe src="/static/opt_conformer.html?ts={timestamp}" height="300" width="400" title="NGL View"></iframe>'
-
+    try:
+        Chem.MolToPDBFile(mol, conformers_file_path)
+        view = nglview.show_rdkit(mol)
+        nglview.write_html('./static/opt_conformer.html', [view])
+        timestamp = int(time.time())
+        html = f'<iframe src="/static/opt_conformer.html?ts={timestamp}" height="300" width="400" title="NGL View"></iframe>'
+    except Exception as exc:
+        gr.Warning(f"Conformer visualization error!\n{exc}")
+        return None
     return html
 
 def on_visualization_change(visualization_dropdown: gr.Dropdown):
@@ -182,57 +165,49 @@ def on_visualization_change(visualization_dropdown: gr.Dropdown):
     return gr.Slider(label="Isolevel", value=0.5, minimum=0, maximum=1, step=0.01, visible=False)
 
 def on_visualization(visualization_dropdown: gr.Dropdown, visualization_color1: gr.ColorPicker, visualization_color2: gr.ColorPicker, visualization_opacity: gr.Slider, visualization_isolevel: gr.Slider):
-    # Set options for cube file generation
     try:
         os.makedirs("./static/opt_visualization", exist_ok=True)
+        view = nglview.show_rdkit(mol)
         if visualization_dropdown == "Electron density":
-            psi4.set_options({'CUBEPROP_TASKS': ['DENSITY'],
-                              'CUBIC_GRID_SPACING': [0.1, 0.1, 0.1],
-                              'CUBEPROP_FILEPATH': './static/opt_visualization'})
-            
-            # Generate the cube file
+            psi4.set_options({
+                'CUBEPROP_TASKS': ['DENSITY'],
+                'CUBIC_GRID_SPACING': [0.1, 0.1, 0.1],
+                'CUBEPROP_FILEPATH': './static/opt_visualization'
+            })
             psi4.cubeprop(wfn)
-
-            # Get the latest cube file
-            view = nglview.show_rdkit(mol)
             view.add_component("./static/opt_visualization/Dt.cube")
-
-            # Adjust visualization settings
             view.component_1.update_surface(opacity=visualization_opacity, color=visualization_color1, isolevel=visualization_isolevel)
-            view.camera = 'orthographic'
         else:
-            MO_index = int(visualization_dropdown.split(" ")[1])
-            psi4.set_options({'CUBEPROP_TASKS': ['ORBITALS'],
-                              'CUBEPROP_ORBITALS': [MO_index, -MO_index],
-                              'CUBIC_GRID_SPACING': [0.1, 0.1, 0.1],
-                              'CUBEPROP_FILEPATH': './static/opt_visualization'})
-            
-            # Generate the cube file
+            try:
+                MO_index = int(visualization_dropdown.split(" ")[1])
+            except (IndexError, ValueError):
+                gr.Warning("Invalid MO selection.")
+                return None
+            psi4.set_options({
+                'CUBEPROP_TASKS': ['ORBITALS'],
+                'CUBEPROP_ORBITALS': [MO_index, -MO_index],
+                'CUBIC_GRID_SPACING': [0.1, 0.1, 0.1],
+                'CUBEPROP_FILEPATH': './static/opt_visualization'
+            })
             psi4.cubeprop(wfn)
-
-            # Get the latest cube file
-            view = nglview.show_rdkit(mol)
-            a_cube_filepath = max(glob.glob("./static/opt_visualization/Psi_a_{}_*.cube".format(MO_index)), key=os.path.getctime)
+            pattern = f"./static/opt_visualization/Psi_a_{MO_index}_*.cube"
+            cube_files = glob.glob(pattern)
+            if not cube_files:
+                gr.Warning("No cube file found for selected MO.")
+                return None
+            a_cube_filepath = max(cube_files, key=os.path.getctime)
             view.add_component(a_cube_filepath)
             view.add_component(a_cube_filepath)
-
-            # Adjust visualization settings
             view.component_1.update_surface(opacity=visualization_opacity, color=visualization_color1, isolevel=2)
             view.component_2.update_surface(opacity=visualization_opacity, color=visualization_color2, isolevel=-2)
-            view.camera = 'orthographic'
-        
-        # Write the widget to HTML
-        if os.path.exists('./static/opt_visualization/cube_file.html'):
-            os.remove('./static/opt_visualization/cube_file.html')
-        nglview.write_html('./static/opt_visualization/cube_file.html', [view])
+        view.camera = 'orthographic'
 
-        # Read the HTML file
+        nglview.write_html('./static/opt_visualization/cube_file.html', [view])
         timestamp = int(time.time())
         html = f'<iframe src="/static/opt_visualization/cube_file.html?ts={timestamp}" height="400" width="600" title="NGL View"></iframe>'
     except Exception as exc:
-        gr.Warning("Visualization error!\n" + str(exc))
+        gr.Warning(f"Visualization error!\n{exc}")
         return None
-    
     return html
 
 def geometry_optimization_tab_content():
