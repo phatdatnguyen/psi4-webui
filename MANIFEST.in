@@ -1,0 +1,6 @@
+include LICENSE.txt
+include Readme.md
+include requirements-dev.txt
+include pytest.ini
+recursive-include src/psi4_webui *.css
+recursive-include tests *.py

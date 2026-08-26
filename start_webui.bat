@@ -1,5 +1,5 @@
 @echo off
 
 call conda activate ./psi4-env
-python webui.py
+psi4-webui
 pause

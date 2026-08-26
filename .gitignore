@@ -1,13 +1,36 @@
 flagged/
 psi4-env/
+data/
+static/
 structures/
 __pycache__/
 .vs/
-.clean
+.claude/
+orca-webui/
 
+# Python packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+
+# Psi4 scratch / run artifacts
+timer.dat
+*.clean
+
+*.out
+*.log
+*.csv
 *.xyz
 *.pdb
-*.clean
-*.cube
+*.mol
+*.mol2
 *.html
-*.dat
+*.cube
+*.npy
+*.txt
+!LICENSE.txt
+!requirements-dev.txt
+
+CLAUDE.md

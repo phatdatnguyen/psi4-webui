@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "psi4-webui"
+version = "0.1.0"
+description = "A Gradio web UI for simple Psi4 computational-chemistry calculations (conformer generation, single point, geometry optimization, frequency/IR, TD-DFT UV-Vis and ECD), run directly through the Psi4 Python API."
+readme = "Readme.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE.txt"]
+authors = [{ name = "Dat Nguyen" }]
+keywords = [
+    "psi4",
+    "computational chemistry",
+    "quantum chemistry",
+    "dft",
+    "tddft",
+    "ecd",
+    "circular dichroism",
+    "spectroscopy",
+    "gradio",
+    "chemistry",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+# psi4 itself is deliberately NOT listed: it is not installable from PyPI (conda-forge
+# only), so declaring it here would make the wheel uninstallable. Install it with
+#   conda install psi4 -c conda-forge
+# into the same environment; the app reports a clear error if the import fails.
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "gradio==5.50.0",
+    "nglview==4.0",
+    "rdkit",
+    "numpy",
+    "pandas",
+    "plotly",
+    "matplotlib",
+    "psutil",
+]
+
+# gradio_molecule2d (the optional 2D drawing editor) is intentionally NOT a hard
+# dependency: its 0.0.3 release pins gradio<5.0, which cannot coexist with the
+# gradio==5.50.0 this app targets. Install it separately to enable the editor:
+#   pip install gradio_molecule2d --no-deps
+# Without it, the conformer tab omits the editor and users enter SMILES directly.
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "build", "twine"]
+
+[project.urls]
+Homepage = "https://github.com/phatdatnguyen/psi4-webui"
+Repository = "https://github.com/phatdatnguyen/psi4-webui"
+Issues = "https://github.com/phatdatnguyen/psi4-webui/issues"
+
+[project.scripts]
+psi4-webui = "psi4_webui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+psi4_webui = ["styles.css"]
