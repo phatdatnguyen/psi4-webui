@@ -71,7 +71,7 @@ def build_app(run_dir: Path | None = None) -> FastAPI:
     ``run_dir`` (default: current working directory) is where the ``data/`` and
     ``static/`` directories are created and served from.
     """
-    run_dir = Path.cwd() if run_dir is None else run_dir
+    run_dir = (Path.cwd() if run_dir is None else Path(run_dir)).resolve()
     _cleanup_transient_files(run_dir)
 
     app = FastAPI()
@@ -86,7 +86,8 @@ def build_app(run_dir: Path | None = None) -> FastAPI:
 
     with gr.Blocks(css_paths=_STYLES_PATH) as blocks:
         with gr.Row():
-            working_directory_path_state, working_directory_file_list_state = working_directory_blocks()
+            working_directory_path_state, working_directory_file_list_state = working_directory_blocks(
+                data_directory=run_dir / "data", static_directory=static_dir)
             with gr.Column(scale=2):
                 with gr.Row(min_height=40):
                     status_markdown = gr.Markdown()
@@ -94,7 +95,8 @@ def build_app(run_dir: Path | None = None) -> FastAPI:
                     with gr.Tabs():
                         conformer_generation_tab_content(working_directory_path_state, working_directory_file_list_state, status_markdown)
                         calculation_tab_content(working_directory_path_state, working_directory_file_list_state, status_markdown)
-                        result_tab_content(working_directory_path_state, working_directory_file_list_state, status_markdown)
+                        result_tab_content(working_directory_path_state, working_directory_file_list_state,
+                                           status_markdown, static_directory=static_dir)
 
     # mount Gradio app to FastAPI app
     return gr.mount_gradio_app(app, blocks, path="/")

@@ -6,11 +6,14 @@ both close in energy AND superimposable on an accepted conformer. Survivors are 
 into the working directory as .xyz/.pdb/.mol, ready for the Calculation tab.
 """
 import os
+import html
+import math
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdMolAlign
 import gradio as gr
 from .utils import get_files_in_working_directory, conformer_to_xyz_file
+from ._paths import file_in_directory, validate_name
 
 # The 2D sketcher is optional: gradio_molecule2d 0.0.3 declares gradio<5.0, which cannot
 # coexist with the gradio==5.50.0 this app targets, so it is installed separately with
@@ -29,6 +32,8 @@ OVERSAMPLING_FACTOR = 4
 MAX_BATCH_SIZE = 250
 
 def on_draw_molecule(molecule_editor):
+    if not molecule_editor:
+        return ""
     mol = Chem.MolFromSmiles(molecule_editor)
     if mol is None:
         return ""
@@ -43,9 +48,14 @@ def optimize_conformers(mol):
     if mmff_properties is not None:
         results = AllChem.MMFFOptimizeMoleculeConfs(mol, maxIters=1000, numThreads=0)
     else:
+        if not AllChem.UFFHasAllMoleculeParams(mol):
+            raise ValueError("Neither MMFF nor UFF has parameters for every atom in this molecule")
         results = AllChem.UFFOptimizeMoleculeConfs(mol, maxIters=1000, numThreads=0)
 
-    return [energy for _, energy in results]
+    # Preserve the conformer/energy alignment while excluding unfinished or failed
+    # minimizations. Their energies must not enter the table or duplicate comparison.
+    return [energy if status == 0 and math.isfinite(energy) else None
+            for status, energy in results]
 
 def is_duplicate_conformer(energy, conf_id, kept, candidate_heavy_mol, kept_heavy_mol, energy_threshold, rms_threshold):
     # A candidate is a duplicate of an accepted conformer only when it is both close in energy and
@@ -66,6 +76,18 @@ def is_duplicate_conformer(energy, conf_id, kept, candidate_heavy_mol, kept_heav
 def generate_unique_conformers(mol, num_confs, energy_threshold, rms_threshold, progress=None):
     # Embed conformers repeatedly, discarding the duplicates, until num_confs unique conformers
     # are collected or the molecule runs out of distinct conformations
+    if mol.GetNumAtoms() == 0:
+        raise ValueError("Please enter a SMILES string containing atoms")
+    if len(Chem.GetMolFrags(mol)) != 1:
+        # RDKit embeds disconnected fragments independently at the same origin and
+        # the force fields ignore their interactions, leaving overlapping nuclei.
+        raise ValueError("Conformer generation requires a single connected molecule; "
+                         "use a prepared 3D structure file for multiple fragments")
+    if not math.isfinite(num_confs) or num_confs < 1 or int(num_confs) != num_confs:
+        raise ValueError("The number of conformers must be a positive integer")
+    num_confs = int(num_confs)
+    if any(not math.isfinite(value) or value < 0 for value in (energy_threshold, rms_threshold)):
+        raise ValueError("Duplicate thresholds must be finite and non-negative")
     unique_mol = Chem.Mol(mol)
     unique_mol.RemoveAllConformers()
     # heavy atom copy of the accepted conformers, kept in sync with unique_mol, used for the RMSD test
@@ -94,6 +116,8 @@ def generate_unique_conformers(mol, num_confs, energy_threshold, rms_threshold, 
 
         num_accepted_this_round = 0
         for conformer, energy in zip(candidate_mol.GetConformers(), energies):
+            if energy is None:
+                continue
             conf_id = conformer.GetId()
             if is_duplicate_conformer(energy, conf_id, kept, candidate_heavy_mol, kept_heavy_mol, energy_threshold, rms_threshold):
                 num_discarded += 1
@@ -110,12 +134,19 @@ def generate_unique_conformers(mol, num_confs, energy_threshold, rms_threshold, 
 
         num_barren_rounds = 0 if num_accepted_this_round > 0 else num_barren_rounds + 1
 
+    if not kept:
+        raise ValueError("No minimized conformers could be generated; embedding or force-field optimization failed")
     # lowest energy first
     return unique_mol, sorted(kept), num_discarded
 
 def on_generate_conformers(working_directory_path, input_smiles, charge, multiplicity, num_confs, energy_threshold, rms_threshold, file_name, file_type, progress=gr.Progress()):
     empty_dataframe = pd.DataFrame(columns=["ID", "Energy (kcal/mol)"])
     try:
+        if not working_directory_path or not os.path.isdir(working_directory_path):
+            raise ValueError("Please open a working directory first")
+        file_name = validate_name(file_name)
+        if file_type not in {"xyz", "pdb", "mol"}:
+            raise ValueError("Unsupported conformer file type")
         mol = Chem.MolFromSmiles(input_smiles)
         if mol is None:
             raise ValueError(f'invalid SMILES "{input_smiles}"')
@@ -128,16 +159,14 @@ def on_generate_conformers(working_directory_path, input_smiles, charge, multipl
         for index, (energy, conf_id) in enumerate(progress.tqdm(conformers, total=len(conformers), desc="Writing")):
             conformer_id = index + 1
             # Create a unique file name for each conformer
-            conf_file_path = os.path.join(working_directory_path, f'{file_name}_{conformer_id}')
+            conf_file_path = file_in_directory(
+                working_directory_path, f'{file_name}_{conformer_id}.{file_type}')
             # Write conformers geometry to file
             if file_type == 'xyz':
-                conf_file_path += '.xyz'
                 conformer_to_xyz_file(unique_mol, conf_id, conf_file_path, charge, multiplicity)
             elif file_type == 'pdb':
-                conf_file_path += '.pdb'
                 Chem.MolToPDBFile(unique_mol, conf_file_path, confId=conf_id)
             else: # file_type_dropdown == 'mol'
-                conf_file_path += '.mol'
                 Chem.MolToMolFile(unique_mol, conf_file_path, confId=conf_id)
             conformer_rows.append([conformer_id, round(energy, 4)])
 
@@ -145,12 +174,12 @@ def on_generate_conformers(working_directory_path, input_smiles, charge, multipl
 
         status = f'{len(conformer_rows)} conformers generated, {num_discarded} duplicates discarded.'
         if len(conformer_rows) < num_confs:
-            status += f' The molecule has no more conformations that differ by at least {energy_threshold} kcal/mol and {rms_threshold} A RMSD, lower the thresholds to keep more.'
+            status += ' The search stopped before reaching the requested count. Try lower duplicate thresholds to keep more conformers.'
             return f"<span style='color:orange;'>{status}</span>", get_files_in_working_directory(working_directory_path), conformer_dataframe
         return f"<span style='color:green;'>{status}</span>", get_files_in_working_directory(working_directory_path), conformer_dataframe
     except Exception as exc:
         status = f'Error generating conformers: {exc}'
-        return f"<span style='color:red;'>{status}</span>", get_files_in_working_directory(working_directory_path), empty_dataframe
+        return f"<span style='color:red;'>{html.escape(status)}</span>", get_files_in_working_directory(working_directory_path), empty_dataframe
 
 def show_selected_file(selected_file):
     gr.Warning(selected_file)

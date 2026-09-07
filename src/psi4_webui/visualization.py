@@ -2,14 +2,14 @@
 
 nglview is a Jupyter widget, so it cannot be embedded in a Gradio page directly. Both
 viewers therefore take the same route: build the widget, write it to a standalone HTML
-file under ``static/``, and return an ``<iframe>`` pointing at it. The iframe URL carries
-a timestamp because the browser would otherwise serve the previous render from cache --
-the file name never changes.
+file under ``static/``, and return an ``<iframe>`` pointing at it. Each render gets its
+own URL so simultaneous sessions cannot overwrite each other's molecule or surfaces.
 """
 import contextlib
 import glob
 import os
-import time
+import threading
+import uuid
 
 import nglview
 
@@ -18,6 +18,7 @@ from .utils import mol_from_symbols_and_coords
 # Where the generated viewer HTML goes. Relative to the process working directory, which
 # is what app.py mounts at /static.
 _STATIC_DIR = os.path.join(".", "static")
+_WIDGET_LOCK = threading.RLock()
 
 # The non-orbital selections the viewer understands. Defined here rather than in the
 # Result tab because this module owns both halves of the mapping: which cubeprop task a
@@ -34,9 +35,20 @@ _CUBE_FILE_NAMES = {
 }
 
 
+class _StandaloneNGLWidget(nglview.NGLWidget):
+    """An HTML-export widget with no live notebook communication threads."""
+
+    def _initialize_threads(self):
+        # nglview 4.0 starts permanent RemoteCallThreads that hold the whole view alive
+        # and cannot be stopped. A standalone export never connects a notebook frontend:
+        # loaded stays False and write_html serializes the recorded message archive.
+        # No remote callbacks need executing in this process.
+        pass
+
+
 def _iframe(src: str, width: int = 600, height: int = 600) -> str:
-    """Cache-busted iframe pointing at a file under ``/static``."""
-    return (f'<iframe src="{src}?ts={int(time.time())}" height="{height}" width="{width}" '
+    """Iframe pointing at a unique render under ``/static``."""
+    return (f'<iframe src="{src}" height="{height}" width="{width}" '
             f'title="NGL View" style="border:none;"></iframe>')
 
 
@@ -64,26 +76,30 @@ def _transient_widgets():
     except Exception:  # pragma: no cover - depends on the ipywidgets version
         registry = None
 
-    before = set(registry) if registry is not None else set()
-    try:
-        yield
-    finally:
-        if registry is not None:
-            for key in set(registry) - before:
-                registry.pop(key, None)
+    # Structure and cube viewers use different Gradio handlers and can run together.
+    # Serialize widget creation through HTML export and cleanup: otherwise one render
+    # embeds or unregisters the other render's widgets from this process-wide registry.
+    with _WIDGET_LOCK:
+        before = set(registry) if registry is not None else set()
+        try:
+            yield
+        finally:
+            if registry is not None:
+                for key in set(registry) - before:
+                    registry.pop(key, None)
 
 
-def _write_view(view, relative_path: str) -> str:
+def _write_view(view, relative_path: str, *, static_directory=None) -> str:
     """Write ``view`` to ``static/<relative_path>`` and return the iframe HTML."""
-    output_path = os.path.join(_STATIC_DIR, relative_path)
+    stem, extension = os.path.splitext(relative_path)
+    relative_path = f"{stem}-{uuid.uuid4().hex}{extension}"
+    output_path = os.path.join(_STATIC_DIR if static_directory is None else static_directory, relative_path)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    if os.path.exists(output_path):
-        os.remove(output_path)
     nglview.write_html(output_path, [view])
     return _iframe("/static/" + relative_path.replace(os.sep, "/"))
 
 
-def render_structure_html(mol) -> str:
+def render_structure_html(mol, *, static_directory=None) -> str:
     """Render ``mol`` with per-atom index labels and return the embedding iframe.
 
     The labels are what let a user map what they see to the geometry Psi4 receives: this
@@ -95,11 +111,11 @@ def render_structure_html(mol) -> str:
     of ethanol came out as "O1", the first oxygen, rather than "O3".
     """
     with _transient_widgets():
-        view = nglview.show_rdkit(mol)
+        view = _StandaloneNGLWidget(nglview.RdkitStructure(mol))
         atom_labels = [f"{atom.GetSymbol()}{atom.GetIdx()}" for atom in mol.GetAtoms()]
         view.add_representation("label", labelType="text", labelText=atom_labels,
                                 color="black", showBackground=False)
-        return _write_view(view, "structure.html")
+        return _write_view(view, "structure.html", static_directory=static_directory)
 
 
 def cube_files_for_selection(output_directory: str, selection: str) -> list[str]:
@@ -124,7 +140,7 @@ def cube_files_for_selection(output_directory: str, selection: str) -> list[str]
 
 def render_cube_html(result, output_directory: str, selection: str,
                      color1: str = "#0000ff", color2: str = "#ff0000",
-                     opacity: float = 0.8, isolevel: float = 0.05) -> str:
+                     opacity: float = 0.8, isolevel: float = 0.05, *, static_directory=None) -> str:
     """Render a cube-file isosurface over the molecule and return the embedding iframe.
 
     The molecule is rebuilt from the result's own geometry rather than from the original
@@ -157,7 +173,7 @@ def render_cube_html(result, output_directory: str, selection: str,
     signed = selection != TOTAL_DENSITY
 
     with _transient_widgets():
-        view = nglview.show_rdkit(mol)
+        view = _StandaloneNGLWidget(nglview.RdkitStructure(mol))
         view.add_component(cube_path)
         view.component_1.update_surface(opacity=opacity, color=color1,
                                         isolevelType="value", isolevel=abs(isolevel))
@@ -167,4 +183,4 @@ def render_cube_html(result, output_directory: str, selection: str,
                                             isolevelType="value", isolevel=-abs(isolevel))
         view.camera = "orthographic"
 
-        return _write_view(view, os.path.join("cubes", "view.html"))
+        return _write_view(view, os.path.join("cubes", "view.html"), static_directory=static_directory)

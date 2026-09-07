@@ -183,9 +183,9 @@ def _frequency_results(psi4, wfn, spec: dict[str, Any]) -> dict[str, Any]:
     intensities = np.asarray(analysis["IR_intensity"].data, dtype=float).ravel()
     vibrational = intensities[trv == "V"]
     if vibrational.size != frequencies.size:
-        # Should not happen, but a length mismatch would mis-assign every peak, so
-        # normalise explicitly rather than letting zip() quietly drop the tail.
-        vibrational = np.resize(vibrational, frequencies.size)
+        # Repeating/truncating intensities would fabricate a spectrum. Fail clearly
+        # if an unexpected Psi4 result cannot be aligned unambiguously.
+        raise ValueError("Vibrational frequencies and IR intensities have different lengths.")
 
     temperature = float(spec.get("temperature", 298.15))
     thermo: dict[str, Any] = {
@@ -350,7 +350,6 @@ def run_job(job_path: str) -> int:
     Always writes ``<base>.result.json``, whether the calculation succeeded or failed, so
     the Result tab has something to explain.
     """
-    spec = read_json(job_path)
     working_directory = os.path.dirname(os.path.abspath(job_path))
     base_name = job_base_name(job_path)
 
@@ -361,22 +360,21 @@ def run_job(job_path: str) -> int:
         "version": 1,
         "status": "failed",
         "error": None,
-        "calculation_type": spec.get("calculation_type"),
-        "method_type": spec.get("method_type"),
-        "method": spec.get("method"),
-        "functional": spec.get("functional"),
-        "basis_set": spec.get("basis_set"),
-        "reference": spec.get("reference"),
-        "charge": spec.get("charge"),
-        "multiplicity": spec.get("multiplicity"),
-        "structure_file": spec.get("structure_file"),
-        "solvent": spec.get("solvent") if spec.get("use_solvation") else None,
         "log_file": os.path.basename(log_path),
     }
 
-    started = time.time()
+    started = time.monotonic()
     psi4 = None
     try:
+        spec = read_json(job_path)
+        if not isinstance(spec, dict):
+            raise ValueError("The job specification must be a JSON object.")
+        result.update({key: spec.get(key) for key in (
+            "calculation_type", "method_type", "method", "functional", "basis_set",
+            "reference", "charge", "multiplicity", "structure_file",
+        )})
+        result["solvent"] = spec.get("solvent") if spec.get("use_solvation") else None
+
         import psi4 as _psi4
 
         psi4 = _psi4
@@ -384,6 +382,8 @@ def run_job(job_path: str) -> int:
         _configure(psi4, spec, os.path.join(working_directory, "scratch"))
 
         molecule = psi4.geometry(spec["geometry"])
+        result["charge"] = int(molecule.molecular_charge())
+        result["multiplicity"] = int(molecule.multiplicity())
         method = spec["method"]
         calculation_type = spec["calculation_type"]
         geom_maxiter = int(spec.get("geom_maxiter", 50))
@@ -468,7 +468,7 @@ def run_job(job_path: str) -> int:
             except Exception:
                 pass  # best-effort scratch cleanup; never mask the real outcome
 
-    result["duration_seconds"] = time.time() - started
+    result["duration_seconds"] = time.monotonic() - started
     write_json(result_path, result)
     return exit_code
 
@@ -480,9 +480,9 @@ def run_cubeprop(spec_path: str) -> int:
     has finished, without paying to generate every cube up front or re-running the
     calculation just to get the wavefunction back.
     """
-    spec = read_json(spec_path)
     psi4 = None
     try:
+        spec = read_json(spec_path)
         import psi4 as _psi4
 
         psi4 = _psi4

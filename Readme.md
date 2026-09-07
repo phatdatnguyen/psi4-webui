@@ -72,7 +72,8 @@ creates `data/` and `static/` in whatever directory you start it from.
    else happens inside it. You can also upload your own `.xyz`/`.pdb`/`.mol`/`.mol2`.
 2. **Conformer generation** — draw or type a SMILES, set the charge, multiplicity and how
    many conformers you want, and press *Generate*. Each conformer is written as its own
-   structure file.
+   structure file. Use one connected molecule; for multiple fragments, upload a prepared
+   3D structure with the fragments already positioned.
 3. **Calculation** — pick a structure, a calculation type and a method, then press *Run*.
    The Psi4 output streams in below while it works.
 4. **Result** — pick the result file and press *Load*. Only the sections the calculation

@@ -13,6 +13,7 @@ browser, not a format anyone is expected to edit.
 Because the child is a real OS process, Stop can genuinely stop it, and the handler
 streams the growing Psi4 log back to the browser while it runs.
 """
+import html
 import math
 import multiprocessing
 import os
@@ -25,6 +26,7 @@ import gradio as gr
 import psutil
 from rdkit.Chem import AllChem
 
+from ._paths import file_in_directory, validate_name
 from .utils import (
     CALCULATION_TYPES,
     EMISSION,
@@ -33,12 +35,14 @@ from .utils import (
     GEOMETRY_OPTIMIZATION,
     JOB_SUFFIX,
     METHOD_TYPES,
+    RESULT_SUFFIX,
     SINGLE_POINT,
     TDDFT,
     build_job_spec,
     get_files_in_working_directory,
     mol_from_structure_file,
     psi4_geometry_string,
+    read_json,
     write_json,
 )
 
@@ -96,12 +100,13 @@ _LOG_TAIL_CHARS = 8000
 # then run at the same time, and Stop kills the right one.
 _processes: dict[str, subprocess.Popen] = {}
 _stopped: set[str] = set()
+_starting: set[str] = set()
 _lock = threading.Lock()
 
 
 def _status(message: str, color: str) -> str:
     """Colored status span, the convention every handler in this app reports through."""
-    return f"<span style='color:{color};'>{message}</span>"
+    return f"<span style='color:{color};'>{html.escape(message)}</span>"
 
 
 def _read_log_tail(log_path: str) -> str:
@@ -252,22 +257,40 @@ def on_run_calculation(working_directory_path, structure_file_name, calculation_
         return
 
     job_name = job_name.strip()
-    file_list = get_files_in_working_directory(working_directory_path)
+    working_directory_path = os.path.normcase(os.path.realpath(working_directory_path))
+    # Reserve the directory before reading or changing any artifacts. Checking only
+    # after preparing a job can overwrite the input and log of an active calculation.
+    with _lock:
+        busy = (working_directory_path in _starting
+                or working_directory_path in _processes)
+        if not busy:
+            _starting.add(working_directory_path)
+            _stopped.discard(working_directory_path)
+    if busy:
+        yield (_status("A calculation is already running in this working directory.", "red"),
+               "", get_files_in_working_directory(working_directory_path))
+        return
 
+    process = None
+    file_list = []
+    started = time.monotonic()
     try:
-        # Same loader the structure viewer uses, so the atom indices labelled on screen
-        # are the ones Psi4 receives.
-        structure_path = os.path.join(working_directory_path, structure_file_name)
+        file_list = get_files_in_working_directory(working_directory_path)
+        validate_name(job_name, "Calculation name")
+        structure_path = file_in_directory(working_directory_path, structure_file_name)
         mol = mol_from_structure_file(structure_path)
 
         if use_mm:
-            # A cheap force-field cleanup before an expensive QM calculation: a strained
-            # embedding costs optimizer steps, and MMFF removes most of that strain for
-            # a fraction of a second of work.
             if force_field == "MMFF":
-                AllChem.MMFFOptimizeMolecule(mol, maxIters=int(max_iters))
+                if not AllChem.MMFFHasAllMoleculeParams(mol):
+                    raise ValueError("MMFF parameters are unavailable for this structure.")
+                optimized = AllChem.MMFFOptimizeMolecule(mol, maxIters=int(max_iters))
             else:
-                AllChem.UFFOptimizeMolecule(mol, maxIters=int(max_iters))
+                if not AllChem.UFFHasAllMoleculeParams(mol):
+                    raise ValueError("UFF parameters are unavailable for this structure.")
+                optimized = AllChem.UFFOptimizeMolecule(mol, maxIters=int(max_iters))
+            if optimized < 0:
+                raise ValueError(f"{force_field} parameters are unavailable for this structure.")
 
         spec = build_job_spec(
             calculation_type=calculation_type,
@@ -298,109 +321,122 @@ def on_run_calculation(working_directory_path, structure_file_name, calculation_
             solvent=solvent,
         )
 
-        job_path = os.path.join(working_directory_path, job_name + JOB_SUFFIX)
-        log_path = os.path.join(working_directory_path, job_name + ".log")
-        write_json(job_path, spec)
+        job_path = file_in_directory(working_directory_path, job_name + JOB_SUFFIX)
+        log_path = file_in_directory(working_directory_path, job_name + ".log")
+        result_path = file_in_directory(working_directory_path, job_name + RESULT_SUFFIX)
+        runner_log_path = file_in_directory(working_directory_path, job_name + ".runner.log")
 
-        # Opening the log below truncates it, so preserve a previous run's output first:
-        # an accidental click on Run would otherwise destroy it. os.replace overwrites an
-        # older backup atomically and works on Windows too.
+        # Stop may have arrived during molecule preparation. Serialize the final
+        # launch with Stop so a cancellation cannot be lost just before registration.
         backed_up = False
-        if os.path.isfile(log_path):
-            os.replace(log_path, log_path + ".bak")
-            backed_up = True
-    except Exception as exc:
-        yield _status(f"Could not start the calculation: {exc}", "red"), "", file_list
-        return
+        with _lock:
+            stopped = working_directory_path in _stopped
+            if not stopped:
+                write_json(job_path, spec)
+                if os.path.isfile(log_path):
+                    os.replace(log_path, file_in_directory(
+                        working_directory_path, job_name + ".log.bak"))
+                    backed_up = True
+                # A killed/aborted child cannot replace its predecessor's result.
+                # Remove the old result from the picker while retaining a backup.
+                if os.path.isfile(result_path):
+                    os.replace(result_path, file_in_directory(
+                        working_directory_path, job_name + RESULT_SUFFIX + ".bak"))
+                with open(runner_log_path, "w", encoding="utf-8") as runner_log:
+                    process = subprocess.Popen(
+                        [sys.executable, "-m", "psi4_webui.runner", "run", job_path],
+                        cwd=working_directory_path,
+                        stdout=runner_log,
+                        stderr=subprocess.STDOUT,
+                    )
+                _processes[working_directory_path] = process
+                _starting.discard(working_directory_path)
 
-    with _lock:
-        existing = _processes.get(working_directory_path)
-        if existing is not None and existing.poll() is None:
-            yield (_status("A calculation is already running in this working directory.", "red"),
-                   "", file_list)
+        if stopped:
+            yield _status("Calculation stopped before launch.", "red"), "", file_list
             return
 
-    # The child's own stderr (Python tracebacks, and any crash message from the OS) goes
-    # to a separate file: <name>.log is owned exclusively by Psi4's C++ output stream, and
-    # a segfault never reaches it.
-    runner_log_path = os.path.join(working_directory_path, job_name + ".runner.log")
-    started = time.time()
-    try:
-        with open(runner_log_path, "w", encoding="utf-8") as runner_log:
-            process = subprocess.Popen(
-                # The job path must be absolute: working directories are named relatively
-                # ("./data/wd"), and the child is started *in* that directory, so a
-                # relative path would be resolved a second time against itself.
-                [sys.executable, "-m", "psi4_webui.runner", "run", os.path.abspath(job_path)],
-                cwd=working_directory_path,
-                stdout=runner_log,
-                stderr=subprocess.STDOUT,
+        file_list = get_files_in_working_directory(working_directory_path)
+        while process.poll() is None:
+            elapsed = time.monotonic() - started
+            yield (_status(f"Running {calculation_type}... ({elapsed:.0f} s)", "black"),
+                   _read_log_tail(log_path), file_list)
+            time.sleep(_POLL_INTERVAL)
+
+        return_code = process.returncode
+        duration = time.monotonic() - started
+        with _lock:
+            stopped = working_directory_path in _stopped
+        if stopped or return_code != 0:
+            _record_interrupted_result(
+                result_path, spec, job_name, duration,
+                "Calculation stopped by the user." if stopped else
+                f"Calculation exited with code {return_code}. See {job_name}.runner.log.",
             )
+        file_list = get_files_in_working_directory(working_directory_path)
+        log_tail = _read_log_tail(log_path)
+        if stopped:
+            yield (_status(f"Calculation stopped after {duration:.1f} s. Partial output in {job_name}.log.", "red"),
+                   log_tail, file_list)
+        elif return_code != 0:
+            detail = f"See {job_name}.log and {job_name}.runner.log."
+            yield (_status(f"Calculation failed (exit code {return_code}). {detail}", "red"),
+                   log_tail, file_list)
+        else:
+            message = f"Calculation finished ({duration:.1f} s)."
+            if backed_up:
+                message += f" Previous log saved as {job_name}.log.bak."
+            yield _status(message, "green"), log_tail, file_list
+    except Exception as exc:
+        try:
+            file_list = get_files_in_working_directory(working_directory_path)
+        except OSError:
+            file_list = []
+        yield _status(f"Could not run the calculation: {exc}", "red"), "", file_list
+    finally:
+        # Gradio can close a streaming generator when a session disconnects. Its
+        # child must be stopped before releasing ownership of the directory.
+        try:
+            if process is not None and process.poll() is None:
+                _terminate_process_tree(process)
+                try:
+                    _record_interrupted_result(
+                        result_path, spec, job_name, time.monotonic() - started,
+                        "Calculation stopped because its progress stream was closed.",
+                    )
+                except OSError:
+                    pass  # the directory may have been removed while the child ran
+        finally:
             with _lock:
-                _processes[working_directory_path] = process
+                _starting.discard(working_directory_path)
+                if _processes.get(working_directory_path) is process:
+                    _processes.pop(working_directory_path, None)
                 _stopped.discard(working_directory_path)
 
-            try:
-                while process.poll() is None:
-                    elapsed = time.time() - started
-                    yield (_status(f"Running {calculation_type}... ({elapsed:.0f} s)", "black"),
-                           _read_log_tail(log_path),
-                           file_list)
-                    time.sleep(_POLL_INTERVAL)
-                return_code = process.returncode
-            finally:
-                with _lock:
-                    _processes.pop(working_directory_path, None)
-                    stopped = working_directory_path in _stopped
-                    _stopped.discard(working_directory_path)
-    except Exception as exc:
-        yield _status(f"Error running calculation: {exc}", "red"), "", get_files_in_working_directory(working_directory_path)
-        return
 
-    duration = time.time() - started
-    file_list = get_files_in_working_directory(working_directory_path)
-    log_tail = _read_log_tail(log_path)
-
-    if stopped:
-        yield (_status(f"Calculation stopped after {duration:.1f} s. Partial output in {job_name}.log.", "red"),
-               log_tail, file_list)
-        return
-    if return_code != 0:
-        # The runner writes a result file even when it fails, so point at the message it
-        # recorded rather than making the user go hunting through two log files.
-        detail = f"See {job_name}.log and {job_name}.runner.log."
-        yield (_status(f"Calculation failed (exit code {return_code}). {detail}", "red"),
-               log_tail, file_list)
-        return
-
-    message = f"Calculation finished ({duration:.1f} s)."
-    if backed_up:
-        message += f" Previous log saved as {job_name}.log.bak."
-    yield _status(message, "green"), log_tail, file_list
+def _record_interrupted_result(result_path, spec, job_name, duration, error):
+    """Keep a usable result when termination bypasses the runner's exception handler."""
+    try:
+        result = read_json(result_path)
+        if isinstance(result, dict) and result.get("status") in ("completed", "failed"):
+            return
+    except (OSError, ValueError):
+        pass  # missing or interrupted partway through the runner's JSON write
+    write_json(result_path, {
+        "version": 1, "status": "failed", "error": error,
+        "calculation_type": spec["calculation_type"], "method": spec["method"],
+        "basis_set": spec["basis_set"], "log_file": job_name + ".log",
+        "duration_seconds": duration,
+    })
 
 
-def on_stop_calculation(working_directory_path):
-    """Terminate the Psi4 child running in ``working_directory_path``, if any.
-
-    Psi4 spawns OpenMP worker threads and can shell out further, so the whole process
-    tree is signalled (SIGTERM first, SIGKILL for anything still alive after 5 s);
-    terminating only the process we launched could leave the cores busy. The run handler
-    reports the outcome once ``poll()`` returns, so this only needs to acknowledge the
-    request.
-    """
-    with _lock:
-        process = _processes.get(working_directory_path)
-        if process is None or process.poll() is not None:
-            gr.Warning("No calculation is running.")
-            return ""
-        _stopped.add(working_directory_path)
-
+def _terminate_process_tree(process):
+    """Terminate descendants and the child, then reap it before releasing ownership."""
     try:
         parent = psutil.Process(process.pid)
         targets = parent.children(recursive=True) + [parent]
     except psutil.NoSuchProcess:
         targets = []
-
     for target in targets:
         try:
             target.terminate()
@@ -412,7 +448,35 @@ def on_stop_calculation(working_directory_path):
             target.kill()
         except psutil.NoSuchProcess:
             pass
+    process.wait()
 
+
+def on_stop_calculation(working_directory_path):
+    """Terminate the Psi4 child running in ``working_directory_path``, if any.
+
+    Psi4 spawns OpenMP worker threads and can shell out further, so the whole process
+    tree is signalled (SIGTERM first, SIGKILL for anything still alive after 5 s);
+    terminating only the process we launched could leave the cores busy. The run handler
+    reports the outcome once ``poll()`` returns, so this only needs to acknowledge the
+    request.
+    """
+    if not working_directory_path:
+        gr.Warning("No calculation is running.")
+        return ""
+    working_directory_path = os.path.normcase(os.path.realpath(working_directory_path))
+    with _lock:
+        process = _processes.get(working_directory_path)
+        starting = working_directory_path in _starting
+        if not starting and (process is None or process.poll() is not None):
+            gr.Warning("No calculation is running.")
+            return ""
+        _stopped.add(working_directory_path)
+
+    try:
+        if process is not None:
+            _terminate_process_tree(process)
+    except (OSError, psutil.Error) as exc:
+        return _status(f"Could not stop calculation: {exc}", "red")
     return _status("Stopping calculation...", "red")
 
 
@@ -514,7 +578,8 @@ def calculation_tab_content(working_directory_path_state, working_directory_file
                          n_states_slider, tda_checkbox, root_slider,
                          solvation_checkbox, solvent_dropdown,
                          n_threads_slider, memory_slider, job_name_textbox],
-                        [status_markdown, live_output_textarea, working_directory_file_list_state]) \
+                        [status_markdown, live_output_textarea, working_directory_file_list_state],
+                        concurrency_limit=None) \
                   .then(on_calculation_finished, None, run_button)
         # concurrency_limit=None: without it this event would queue behind the running
         # calculation it is meant to interrupt, and only fire once Psi4 had finished.

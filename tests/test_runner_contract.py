@@ -420,3 +420,36 @@ class TestFailurePaths:
     def test_bad_usage_exits_two(self, tmp_path):
         assert main([]) == 2
         assert main(["frobnicate", "x.json"]) == 2
+
+
+@pytest.mark.parametrize("contents", ["{broken", "[]", "null"])
+def test_invalid_job_still_writes_a_failure_result(tmp_path, contents):
+    path = tmp_path / "invalid.job.json"
+    path.write_text(contents, encoding="utf-8")
+    assert main(["run", str(path)]) == 1
+    result = read_json(str(tmp_path / "invalid.result.json"))
+    assert result["status"] == "failed"
+    assert result["error"]
+
+
+def test_result_charge_and_spin_follow_geometry(tmp_path, monkeypatch):
+    _install_fake_psi4(monkeypatch)
+    assert main(["run", _write_job(tmp_path, geometry="-1 2\nO 0 0 0")]) == 0
+    result = read_json(str(tmp_path / "job.result.json"))
+    assert result["charge"] == -1
+    assert result["multiplicity"] == 2
+
+
+def test_mismatched_ir_arrays_fail_instead_of_repeating_intensities(tmp_path, monkeypatch):
+    _install_fake_psi4(monkeypatch)
+    monkeypatch.setattr(_FakeWavefunction, "frequencies", lambda self: _Array([1000.0] * 7))
+    assert main(["run", _write_job(tmp_path, calculation_type="Frequency")]) == 1
+    result = read_json(str(tmp_path / "job.result.json"))
+    assert "different lengths" in result["error"]
+    assert "frequency" not in result
+
+
+def test_invalid_cube_spec_returns_failure_exit_code(tmp_path):
+    path = tmp_path / "cube.json"
+    path.write_text("{broken", encoding="utf-8")
+    assert main(["cubeprop", str(path)]) == 1

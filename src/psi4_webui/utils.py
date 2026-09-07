@@ -40,6 +40,7 @@ FREQUENCY = "Frequency"
 TDDFT = "Time-Dependent Density Functional Theory"
 EMISSION = "Emission (EOM-CCSD)"
 CALCULATION_TYPES = [SINGLE_POINT, GEOMETRY_OPTIMIZATION, FREQUENCY, TDDFT, EMISSION]
+_ELEMENT_SYMBOLS = {Chem.GetPeriodicTable().GetElementSymbol(i) for i in range(1, 119)}
 
 def get_files_in_working_directory(working_directory_path: str) -> list[str]:
     """Return the file names in ``working_directory_path``, or ``[]`` if it is unset.
@@ -59,7 +60,11 @@ def get_files_in_working_directory(working_directory_path: str) -> list[str]:
     """
     if not working_directory_path:
         return []
-    return [f for f in os.listdir(working_directory_path)
+    try:
+        names = os.listdir(working_directory_path)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    return [f for f in names
             if not f.endswith('Zone.Identifier')
             and os.path.isfile(os.path.join(working_directory_path, f))]
 
@@ -79,7 +84,7 @@ def conformer_to_xyz_file(mol: Chem.Mol, conf_id: int, file_path: str,
         xyz_lines.append(f"{atom.GetSymbol()} {pos.x} {pos.y} {pos.z}")
 
     # Construct the XYZ string
-    xyz_string = f"{charge} {multiplicity}\n" + "\n".join(xyz_lines)
+    xyz_string = f"{int(charge)} {int(multiplicity)}\n" + "\n".join(xyz_lines)
     
     with open(file_path, 'w') as file:
         file.write(xyz_string)
@@ -164,8 +169,9 @@ def mol_from_xyz_file(file_path: str, return_charge_and_multiplicity: bool = Fal
       clicking the file in the browser wants to see. Reading every line as an atom would
       otherwise fuse all the frames into one nonsense molecule.
 
-    Anything else defaults to charge/multiplicity ``0``/``1``. Only lines with exactly
-    four whitespace-separated fields (symbol + x/y/z) are treated as atoms.
+    Standard frames are parsed using their declared atom counts, so comments cannot
+    become atoms and an incomplete final frame cannot borrow atoms from an earlier
+    one. Malformed or non-finite coordinates raise ``ValueError``.
 
     Returns the ``Mol`` alone, or ``(mol, charge, multiplicity)`` when
     ``return_charge_and_multiplicity`` is True.
@@ -173,51 +179,66 @@ def mol_from_xyz_file(file_path: str, return_charge_and_multiplicity: bool = Fal
     with open(file_path, 'r') as file:
         xyz_string = file.read()
 
-    lines = xyz_string.split('\n')
+    lines = xyz_string.splitlines()
+    if not lines or not any(line.strip() for line in lines):
+        raise ValueError("XYZ file is empty")
+
     charge, multiplicity = 0, 1
     first_fields = lines[0].split()
+    atom_lines = []
     if len(first_fields) == 2:
         try:
             charge, multiplicity = int(first_fields[0]), int(first_fields[1])
-        except ValueError:
-            charge, multiplicity = 0, 1
+        except ValueError as exc:
+            raise ValueError("XYZ charge and multiplicity must be integers") from exc
+        if multiplicity < 1:
+            raise ValueError("XYZ multiplicity must be positive")
+        atom_lines = lines[1:]
     elif len(first_fields) == 1:
-        # Standard XYZ: keep only the trailing ``n_atoms`` atom lines, i.e. the last frame.
         try:
-            n_atoms = int(first_fields[0])
+            int(first_fields[0])
         except ValueError:
-            n_atoms = 0
-        if n_atoms > 0:
-            atom_lines = [line for line in lines if len(line.split()) == 4]
-            if len(atom_lines) >= n_atoms:
-                lines = [""] + atom_lines[-n_atoms:]
+            atom_lines = lines[1:]
+        else:
+            cursor = 0
+            while cursor < len(lines):
+                if not lines[cursor].strip():
+                    cursor += 1
+                    continue
+                try:
+                    n_atoms = int(lines[cursor].strip())
+                except ValueError as exc:
+                    raise ValueError(f"Invalid XYZ atom count on line {cursor + 1}") from exc
+                if n_atoms < 1:
+                    raise ValueError("XYZ atom count must be positive")
+                end = cursor + 2 + n_atoms
+                if end > len(lines):
+                    raise ValueError("Incomplete XYZ frame: fewer atoms than its declared count")
+                # The comment is one complete line regardless of its contents.
+                atom_lines = lines[cursor + 2:end]
+                for line in atom_lines:
+                    _xyz_atom(line)
+                cursor = end
+    else:
+        # Also accept a bare coordinate block, or a single title before the atoms.
+        atom_lines = lines if len(first_fields) == 4 else lines[1:]
 
-    # Create a new empty molecule
+    atom_lines = [line for line in atom_lines if line.strip()]
+    # The app's charge/multiplicity variant can have an optional comment line.
+    # An element followed by malformed coordinates is an error, not a comment.
+    if (atom_lines and len(first_fields) == 2
+            and len(atom_lines[0].split()) != 4
+            and atom_lines[0].split()[0].capitalize() not in _ELEMENT_SYMBOLS):
+        atom_lines = atom_lines[1:]
+    if not atom_lines:
+        raise ValueError("XYZ file contains no atoms")
+
+    atoms = [_xyz_atom(line) for line in atom_lines]
     mol = Chem.RWMol()
-
-    # Parse the atomic coordinates and add atoms
-    elements = []
-    for line in lines[1:]:
-        if len(line.split())==4:
-            parts = line.split()
-            element = parts[0].capitalize()
-            atom = Chem.Atom(element)
-            mol.AddAtom(atom)
-            elements.append(element)
-        else:
-            continue
-
-    # Add 3D coordinates to the molecule
-    conf = Chem.Conformer(mol.GetNumAtoms())
-    atom_idx = 0
-    for line in lines[1:]:
-        if len(line.split())==4:
-            parts = line.split()
-            x, y, z = map(float, parts[1:4])
-            conf.SetAtomPosition(atom_idx, (x, y, z))
-            atom_idx += 1
-        else:
-            continue
+    conf = Chem.Conformer(len(atoms))
+    for index, (element, coords) in enumerate(atoms):
+        mol.AddAtom(Chem.Atom(element))
+        conf.SetAtomPosition(index, coords)
     mol.AddConformer(conf)
                 
     # Convert to a regular Mol object
@@ -227,6 +248,23 @@ def mol_from_xyz_file(file_path: str, return_charge_and_multiplicity: bool = Fal
         return mol, charge, multiplicity
     else:
         return mol
+
+
+def _xyz_atom(line: str):
+    """Validate one XYZ record before handing coordinates to RDKit."""
+    fields = line.split()
+    if len(fields) != 4:
+        raise ValueError(f"Invalid XYZ atom line: {line!r}")
+    element = fields[0].capitalize()
+    if element not in _ELEMENT_SYMBOLS:
+        raise ValueError(f"Unknown XYZ element: {fields[0]}")
+    try:
+        coords = tuple(float(value) for value in fields[1:])
+    except ValueError as exc:
+        raise ValueError(f"Invalid XYZ coordinates: {line!r}") from exc
+    if not np.isfinite(coords).all():
+        raise ValueError("XYZ coordinates must be finite")
+    return element, coords
 
 def mol_from_structure_file(file_path: str) -> Chem.Mol:
     """Load any structure file the UI accepts into a sanitized ``Mol`` with a conformer.
@@ -723,6 +761,16 @@ def mol_from_symbols_and_coords(symbols, coords) -> Chem.Mol:
     drawn are in exactly the frame the cube grid was computed on. Bonds are perceived by
     :func:`add_bonds` because a result file stores geometry only, not connectivity.
     """
+    symbols = list(symbols)
+    try:
+        coords = np.asarray(coords, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Geometry must contain one numeric coordinate triplet per atom") from exc
+    if not symbols or coords.shape != (len(symbols), 3):
+        raise ValueError("Geometry must contain one coordinate triplet per atom")
+    if not np.isfinite(coords).all():
+        raise ValueError("Geometry coordinates must be finite")
+
     mol = Chem.RWMol()
     for symbol in symbols:
         mol.AddAtom(Chem.Atom(str(symbol).capitalize()))

@@ -5,13 +5,23 @@ browser: these pin what each kind of result file makes visible and what lands in
 table.
 """
 import os
+import subprocess
 
 import pytest
 
 pytest.importorskip("gradio")
 pytest.importorskip("plotly")
 
-from psi4_webui.result import RESULT_OUTPUT_COUNT, on_load_result_file, on_show_ecd_spectrum  # noqa: E402
+from psi4_webui.result import (  # noqa: E402
+    RESULT_OUTPUT_COUNT,
+    on_export_data,
+    on_load_result_file,
+    on_result_selection_change,
+    on_show_ecd_spectrum,
+    on_visualize,
+    on_working_directory_file_list_change,
+    result_tab_content,
+)
 from psi4_webui.utils import RESULT_SUFFIX, write_json  # noqa: E402
 
 
@@ -31,6 +41,7 @@ FREQ_ACCORDION, FREQ_TABLE, IR_PLOT, THERMO_TABLE, FREQ_NOTE = 8, 9, 10, 11, 12
 EXC_ACCORDION, EXC_TABLE, ABS_PLOT, ECD_BUTTON = 13, 14, 15, 16
 ORBITAL_ACCORDION, VIZ_DROPDOWN, VIZ_HTML = 17, 18, 19
 EMISSION_ACCORDION, EMISSION_TABLE, EMISSION_PLOT = 20, 21, 22
+ECD_PLOT = 23
 
 
 def _visible(update):
@@ -196,3 +207,90 @@ class TestFailedAndMalformed:
         path.write_text("{not valid json", encoding="utf-8")
         outputs = on_load_result_file(str(tmp_path), "broken" + RESULT_SUFFIX)
         assert "red" in outputs[STATUS]
+
+    @pytest.mark.parametrize("result", [None, [], [1], "result", 42, True])
+    def test_json_that_is_not_an_object_is_reported_not_raised(self, tmp_path, result):
+        outputs = _load(tmp_path, result)
+        assert "red" in outputs[STATUS]
+        assert "JSON object" in outputs[STATUS]
+        assert len(outputs) == RESULT_OUTPUT_COUNT
+        assert outputs[RESULT_STATE] is None
+
+
+def test_loading_a_result_clears_any_previous_ecd_plot(tmp_path, tddft_result):
+    assert on_show_ecd_spectrum(tddft_result) is not None
+    assert _load(tmp_path, tddft_result)[ECD_PLOT] is None
+
+
+def test_result_load_wiring_includes_the_ecd_plot():
+    import gradio as gr
+
+    with gr.Blocks() as ui:
+        path, files, status = gr.State(), gr.State(), gr.Markdown()
+        result_tab_content(path, files, status)
+    load_event = next(fn for fn in ui.fns.values() if fn.fn is on_load_result_file)
+    assert len(load_event.outputs) == RESULT_OUTPUT_COUNT
+    assert load_event.outputs[ECD_PLOT].label == "ECD spectrum"
+    reset_events = [fn for fn in ui.fns.values() if fn.fn is on_result_selection_change]
+    assert len(reset_events) == 2  # Both directory and selected result changes reset.
+    assert all(fn.outputs == load_event.outputs for fn in reset_events)
+
+
+def test_changing_the_result_selection_clears_loaded_data_and_plots():
+    outputs = on_result_selection_change()
+    assert len(outputs) == RESULT_OUTPUT_COUNT
+    assert outputs[RESULT_STATE] is None
+    assert outputs[ECD_PLOT] is None
+    assert outputs[VIZ_HTML] is None
+    assert _visible(outputs[ORBITAL_ACCORDION]) is False
+
+
+def test_refreshing_the_file_list_preserves_the_selected_result():
+    selected = "b" + RESULT_SUFFIX
+    update = on_working_directory_file_list_change(["a" + RESULT_SUFFIX, selected, "ir_data.csv"], selected)
+    assert update["value"] == selected
+
+
+def test_refreshing_an_unchanged_selection_preserves_the_loaded_result(tmp_path, tddft_result):
+    loaded = _load(tmp_path, tddft_result)[RESULT_STATE]
+    updates = on_result_selection_change(str(tmp_path), "job" + RESULT_SUFFIX, loaded)
+    assert len(updates) == RESULT_OUTPUT_COUNT
+    assert all(update == {"__type__": "update"} for update in updates)
+
+
+@pytest.mark.parametrize("change", ["directory", "selection"])
+def test_visualization_rejects_a_result_loaded_from_a_different_selection(
+        tmp_path, single_point_result, monkeypatch, change):
+    loaded = _load(tmp_path, single_point_result)[RESULT_STATE]
+    warnings = []
+    monkeypatch.setattr("psi4_webui.result.gr.Warning", warnings.append)
+
+    def unexpected_run(*args, **kwargs):
+        pytest.fail("Cubeprop must not run against a stale loaded result")
+
+    monkeypatch.setattr("psi4_webui.result.subprocess.run", unexpected_run)
+    directory = tmp_path / "other" if change == "directory" else tmp_path
+    name = "other" if change == "selection" else "job"
+    assert on_visualize(str(directory), name + RESULT_SUFFIX, loaded, "Electron density",
+                        "#0000ff", "#ff0000", 0.8, 0.05, 0.2) is None
+    assert any("load the selected result" in warning for warning in warnings)
+
+
+def test_cubeprop_failures_include_stderr(tmp_path, single_point_result, monkeypatch):
+    loaded = _load(tmp_path, single_point_result)[RESULT_STATE]
+    warnings = []
+    monkeypatch.setattr("psi4_webui.result.gr.Warning", warnings.append)
+    monkeypatch.setattr("psi4_webui.result.subprocess.run", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 1, "", "ModuleNotFoundError: psi4"))
+    assert on_visualize(str(tmp_path), "job" + RESULT_SUFFIX, loaded, "Electron density",
+                        "#0000ff", "#ff0000", 0.8, 0.05, 0.2) is None
+    assert any("ModuleNotFoundError: psi4" in warning for warning in warnings)
+
+
+def test_export_cannot_escape_the_working_directory(tmp_path, single_point_result):
+    table = _load(tmp_path, single_point_result)[MO_TABLE]
+    working_directory = tmp_path / "work"
+    working_directory.mkdir()
+    status, _ = on_export_data(str(working_directory), "../outside", table)
+    assert "red" in status
+    assert not (tmp_path / "outside.csv").exists()

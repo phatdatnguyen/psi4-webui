@@ -9,17 +9,19 @@ A single loader (:func:`on_load_result_file`) reads the file and conditionally r
 accordions -- Energy/MOs, Geometry Optimization, Frequency/IR, Absorption/ECD, and
 Orbitals & Density -- based on what the calculation actually produced.
 """
+import html
 import os
 import shutil
 import subprocess
 import sys
-import time
+from functools import partial
 
 import gradio as gr
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
+from ._paths import file_in_directory
 from .utils import (
     RESULT_SUFFIX,
     generate_absorption_emission_spectrum_interactive,
@@ -38,7 +40,7 @@ from .visualization import (
 )
 
 
-def on_working_directory_file_list_change(working_directory_file_list):
+def on_working_directory_file_list_change(working_directory_file_list, current_selection=None):
     """Repopulate the result-file dropdown with the result files in the directory."""
     result_file_names = sorted(
         (f for f in (working_directory_file_list or []) if f.endswith(RESULT_SUFFIX)),
@@ -46,7 +48,8 @@ def on_working_directory_file_list_change(working_directory_file_list):
     )
     return gr.update(
         choices=result_file_names,
-        value=result_file_names[0] if result_file_names else None,
+        value=(current_selection if current_selection in result_file_names
+               else result_file_names[0] if result_file_names else None),
         interactive=True,
     )
 
@@ -186,7 +189,7 @@ def _emission_dataframe(emission):
 # Number of values :func:`on_load_result_file` returns, i.e. the length of
 # ``_result_outputs`` in :func:`result_tab_content`. The two must stay index-aligned;
 # ``test_handlers.py`` asserts it rather than leaving it to review.
-RESULT_OUTPUT_COUNT = 23
+RESULT_OUTPUT_COUNT = 24
 
 
 def _blank_outputs(status):
@@ -199,7 +202,22 @@ def _blank_outputs(status):
         gr.update(visible=False), None, None, gr.update(interactive=False),
         gr.update(visible=False), gr.update(choices=[], value=None), None,
         gr.update(visible=False), None, None,
+        None,
     )
+
+
+def on_result_selection_change(working_directory_path=None, result_file_name=None, result=None):
+    """Clear loaded data when its directory or selected result file changes."""
+    if result and working_directory_path and result_file_name:
+        try:
+            selected_path = os.path.realpath(file_in_directory(working_directory_path, result_file_name))
+            if result.get("_source_result_path") == selected_path:
+                # A file-list refresh can update the dropdown without changing the
+                # selected result (for example after exporting its frequency table).
+                return tuple(gr.update() for _ in range(RESULT_OUTPUT_COUNT))
+        except (TypeError, ValueError):
+            pass
+    return _blank_outputs(gr.update())
 
 
 def on_load_result_file(working_directory_path, result_file_name):
@@ -214,15 +232,20 @@ def on_load_result_file(working_directory_path, result_file_name):
         return _blank_outputs("")
 
     try:
-        result_path = os.path.join(working_directory_path, result_file_name)
+        result_path = file_in_directory(working_directory_path, result_file_name)
         result = read_json(result_path)
+        if not isinstance(result, dict):
+            raise ValueError("The result file must contain a JSON object.")
+        # This is UI state only, never part of the persisted result schema. Check the
+        # origin again before cubeprop in case a directory/selection change is queued.
+        result["_source_result_path"] = os.path.realpath(result_path)
     except Exception as exc:
-        return _blank_outputs(f"<span style='color:red;'>Error loading result file: {exc}</span>")
+        return _blank_outputs(f"<span style='color:red;'>Error loading result file: {html.escape(str(exc))}</span>")
 
     if result.get("status") != "completed":
         error = result.get("error") or "the calculation did not finish"
         return _blank_outputs(
-            f"<span style='color:red;'>This calculation failed: {error}</span>"
+            f"<span style='color:red;'>This calculation failed: {html.escape(str(error))}</span>"
         )
 
     try:
@@ -297,7 +320,7 @@ def on_load_result_file(working_directory_path, result_file_name):
         show_orbitals = bool(result.get("wavefunction_file"))
         visualization_choices = _visualization_choices(result) if show_orbitals else []
 
-        status = f"<span style='color:green;'>Loaded {result_file_name}.</span>"
+        status = f"<span style='color:green;'>Loaded {html.escape(result_file_name)}.</span>"
         return (
             status, result,
             gr.update(visible=show_energy), energy_text, dipole_text, mo_dataframe,
@@ -309,9 +332,10 @@ def on_load_result_file(working_directory_path, result_file_name):
                       value=visualization_choices[0] if visualization_choices else None),
             None,
             gr.update(visible=show_emission), emission_dataframe, emission_figure,
+            None,
         )
     except Exception as exc:
-        return _blank_outputs(f"<span style='color:red;'>Error rendering result: {exc}</span>")
+        return _blank_outputs(f"<span style='color:red;'>Error rendering result: {html.escape(str(exc))}</span>")
 
 
 def on_show_ecd_spectrum(result):
@@ -341,7 +365,7 @@ def on_visualization_change(selection):
 
 
 def on_visualize(working_directory_path, result_file_name, result, selection,
-                 color1, color2, opacity, isolevel, grid_spacing):
+                 color1, color2, opacity, isolevel, grid_spacing, *, static_directory=None):
     """Render the selected density or orbital as an nglview isosurface.
 
     Runs ``psi4.cubeprop`` in a child process against the wavefunction saved by the
@@ -355,8 +379,12 @@ def on_visualize(working_directory_path, result_file_name, result, selection,
         gr.Warning("Please choose something to visualize.")
         return None
 
-    base_name = result_base_name(result_file_name)
     try:
+        source_path = os.path.realpath(file_in_directory(working_directory_path, result_file_name))
+        if result.get("_source_result_path") != source_path:
+            gr.Warning("Please load the selected result before visualizing it.")
+            return None
+        base_name = result_base_name(result_file_name)
         if selection == TOTAL_DENSITY:
             tasks, orbitals = ["DENSITY"], None
         elif selection == SPIN_DENSITY:
@@ -381,8 +409,7 @@ def on_visualize(working_directory_path, result_file_name, result, selection,
         # Absolute throughout: the child runs *in* the working directory, so any path
         # relative to it would be resolved against itself a second time.
         write_json(spec_path, {
-            "wavefunction_path": os.path.abspath(
-                os.path.join(working_directory_path, result["wavefunction_file"])),
+            "wavefunction_path": file_in_directory(working_directory_path, result["wavefunction_file"]),
             "tasks": tasks,
             "orbitals": orbitals,
             "grid_spacing": float(grid_spacing),
@@ -394,12 +421,14 @@ def on_visualize(working_directory_path, result_file_name, result, selection,
             cwd=working_directory_path, capture_output=True, text=True,
         )
         if completed.returncode != 0:
-            gr.Warning(f"Could not generate the cube file:\n{completed.stdout[-2000:]}")
+            details = (completed.stdout + completed.stderr)[-2000:]
+            gr.Warning(f"Could not generate the cube file:\n{details}")
             return None
 
         return render_cube_html(
             result, output_directory, selection,
             color1=color1, color2=color2, opacity=opacity, isolevel=isolevel,
+            static_directory=static_directory,
         )
     except Exception as exc:
         gr.Warning(f"Visualization error: {exc}")
@@ -409,16 +438,17 @@ def on_visualize(working_directory_path, result_file_name, result, selection,
 def on_export_data(working_directory_path, file_name, dataframe):
     """Export a result DataFrame to ``<file_name>.csv`` in the working directory."""
     try:
-        file_path = os.path.join(working_directory_path, file_name + ".csv")
+        file_path = file_in_directory(working_directory_path, file_name + ".csv")
         dataframe.to_csv(file_path, encoding="utf-8", index=False)
         return ("<span style='color:green;'>Data exported successfully.</span>",
                 get_files_in_working_directory(working_directory_path))
     except Exception as exc:
-        return (f"<span style='color:red;'>Error exporting data: {exc}</span>",
+        return (f"<span style='color:red;'>Error exporting data: {html.escape(str(exc))}</span>",
                 get_files_in_working_directory(working_directory_path))
 
 
-def result_tab_content(working_directory_path_state, working_directory_file_list_state, status_markdown):
+def result_tab_content(working_directory_path_state, working_directory_file_list_state, status_markdown,
+                       *, static_directory=None):
     """Build the "Result" tab (all result accordions) and wire its events.
 
     The output list wired to the load handler must stay index-aligned with the return
@@ -487,15 +517,20 @@ def result_tab_content(working_directory_path_state, working_directory_file_list
         excitation_accordion, excitation_dataframe, absorption_plot, ecd_spectrum_button,
         orbital_accordion, visualization_dropdown, visualization_html,
         emission_accordion, emission_dataframe_component, emission_plot,
+        ecd_plot,
     ]
 
     working_directory_file_list_state.change(
-        on_working_directory_file_list_change, working_directory_file_list_state, result_file_dropdown)
+        on_working_directory_file_list_change,
+        [working_directory_file_list_state, result_file_dropdown], result_file_dropdown)
+    selection_inputs = [working_directory_path_state, result_file_dropdown, result_state]
+    working_directory_path_state.change(on_result_selection_change, selection_inputs, _result_outputs)
+    result_file_dropdown.change(on_result_selection_change, selection_inputs, _result_outputs)
     load_button.click(on_load_result_file, [working_directory_path_state, result_file_dropdown], _result_outputs)
     ecd_spectrum_button.click(on_show_ecd_spectrum, result_state, ecd_plot)
     visualization_dropdown.change(on_visualization_change, visualization_dropdown, isolevel_slider)
     visualize_button.click(
-        on_visualize,
+        partial(on_visualize, static_directory=static_directory),
         [working_directory_path_state, result_file_dropdown, result_state, visualization_dropdown,
          color1_picker, color2_picker, opacity_slider, isolevel_slider, grid_spacing_slider],
         visualization_html,

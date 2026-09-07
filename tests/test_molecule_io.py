@@ -20,6 +20,13 @@ def test_get_files_excludes_zone_identifier(tmp_path):
     assert all(not f.endswith("Zone.Identifier") for f in files)
 
 
+def test_get_files_handles_a_removed_or_invalid_working_directory(tmp_path):
+    assert utils.get_files_in_working_directory(str(tmp_path / "missing")) == []
+    file_path = tmp_path / "file.txt"
+    file_path.write_text("not a directory")
+    assert utils.get_files_in_working_directory(str(file_path)) == []
+
+
 # --- conformer_to_xyz_file + mol_from_xyz_file round trip --------------------
 
 def test_xyz_roundtrip_preserves_atoms_and_charge(tmp_path):
@@ -220,3 +227,59 @@ def test_unsupported_extension_raises_a_clear_error(tmp_path):
 
     with pytest.raises(ValueError, match="unsupported structure file type"):
         utils.mol_from_structure_file(str(path))
+
+
+def test_xyz_roundtrip_accepts_integer_valued_slider_floats(tmp_path, water_mol):
+    path = str(tmp_path / "charged.xyz")
+    utils.conformer_to_xyz_file(water_mol, 0, path, charge=-1.0, multiplicity=2.0)
+    _, charge, multiplicity = utils.mol_from_xyz_file(path, return_charge_and_multiplicity=True)
+    assert (charge, multiplicity) == (-1, 2)
+
+
+def test_xyz_trajectory_does_not_splice_an_incomplete_final_frame(tmp_path):
+    path = tmp_path / "truncated.xyz"
+    path.write_text("2\nStep 0\nH 0 0 0\nH 0 0 1\n2\nStep 1\nH 0 0 0.1\n")
+    with pytest.raises(ValueError, match="Incomplete XYZ frame"):
+        utils.mol_from_xyz_file(str(path))
+
+
+def test_xyz_frame_comments_are_never_read_as_atoms(tmp_path):
+    path = tmp_path / "comments.xyz"
+    path.write_text("2\nO 8 8 8\nH 0 0 0\nH 0 0 1\n1\nO 9 9 9\nHe 1 2 3\n")
+    mol = utils.mol_from_xyz_file(str(path))
+    assert [atom.GetSymbol() for atom in mol.GetAtoms()] == ["He"]
+    assert tuple(mol.GetConformer().GetAtomPosition(0)) == (1, 2, 3)
+
+
+@pytest.mark.parametrize("contents, message", [
+    ("", "empty"),
+    ("0\nempty\n", "atom count must be positive"),
+    ("2\ncomment\nH 0 0 0\nH 0 0\n", "Invalid XYZ atom line"),
+    ("0 1\nH 0 0 0\nH 0 0\n", "Invalid XYZ atom line"),
+    ("1\ncomment\nH nan 0 0\n", "must be finite"),
+    ("1\ncomment\nH 0 inf 0\n", "must be finite"),
+    ("1\ncomment\nUnknown 0 0 0\n", "Unknown XYZ element"),
+    ("0 1\nUnknown 0 0 0\nH 0 0 1\n", "Unknown XYZ element"),
+    ("0 0\nH 0 0 0\n", "multiplicity must be positive"),
+])
+def test_invalid_xyz_geometry_is_rejected(tmp_path, contents, message):
+    path = tmp_path / "invalid.xyz"
+    path.write_text(contents)
+    with pytest.raises(ValueError, match=message):
+        utils.mol_from_xyz_file(str(path))
+
+
+def test_bare_xyz_coordinate_block_keeps_first_atom(tmp_path):
+    path = tmp_path / "bare.xyz"
+    path.write_text("H 0 0 0\nH 0 0 0.74\n")
+    assert utils.mol_from_xyz_file(str(path)).GetNumAtoms() == 2
+
+
+@pytest.mark.parametrize("coords, message", [
+    ([[0, 0, 0]], "one coordinate triplet per atom"),
+    ([[0, 0, 0], [0, 0]], "one numeric coordinate triplet per atom"),
+    ([[0, 0, 0], [0, float("nan"), 1]], "must be finite"),
+])
+def test_result_geometry_rejects_missing_or_invalid_coordinates(coords, message):
+    with pytest.raises(ValueError, match=message):
+        utils.mol_from_symbols_and_coords(["H", "H"], coords)

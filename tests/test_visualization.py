@@ -5,6 +5,9 @@ parameters that reach the generated HTML -- which is where the interesting mista
 """
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -16,6 +19,7 @@ from psi4_webui.visualization import (  # noqa: E402
     TOTAL_DENSITY,
     cube_files_for_selection,
     render_cube_html,
+    render_structure_html,
 )
 
 
@@ -50,8 +54,13 @@ def result():
 def _render(tmp_path, monkeypatch, result, cube_directory, selection, isolevel=0.02):
     """Render into an isolated static/ directory and return the generated HTML."""
     monkeypatch.chdir(tmp_path)
-    render_cube_html(result, cube_directory, selection, "#0000ff", "#ff0000", 0.8, isolevel)
-    return (tmp_path / "static" / "cubes" / "view.html").read_text(encoding="utf-8")
+    iframe = render_cube_html(result, cube_directory, selection, "#0000ff", "#ff0000", 0.8, isolevel)
+    return _view_path(tmp_path, iframe).read_text(encoding="utf-8")
+
+
+def _view_path(root, iframe):
+    src = re.search(r'src="([^"]+)"', iframe).group(1)
+    return root / urlsplit(src).path.lstrip("/")
 
 
 def _isolevels(html):
@@ -133,13 +142,62 @@ def test_renders_do_not_accumulate_previous_views(tmp_path, monkeypatch, result,
     cube data) and drags stale isosurfaces from earlier selections into the current one.
     """
     monkeypatch.chdir(tmp_path)
-    view_path = tmp_path / "static" / "cubes" / "view.html"
-
     sizes = []
     for _ in range(3):
-        render_cube_html(result, cube_directory, "MO 2", "#0000ff", "#ff0000", 0.8, 0.02)
+        iframe = render_cube_html(result, cube_directory, "MO 2", "#0000ff", "#ff0000", 0.8, 0.02)
+        view_path = _view_path(tmp_path, iframe)
         html = view_path.read_text(encoding="utf-8")
         assert len(_isolevels(html)) == 2, "render embedded surfaces from a previous render"
         sizes.append(view_path.stat().st_size)
 
     assert len(set(sizes)) == 1, f"viewer HTML grew across renders: {sizes}"
+
+
+def test_later_render_does_not_replace_an_existing_view(tmp_path, monkeypatch, result, cube_directory):
+    monkeypatch.chdir(tmp_path)
+    first = render_cube_html(result, cube_directory, "MO 2", isolevel=0.02)
+    first_path = _view_path(tmp_path, first)
+    original = first_path.read_bytes()
+
+    second = render_cube_html(result, cube_directory, TOTAL_DENSITY, isolevel=0.05)
+    assert first != second
+    assert first_path.read_bytes() == original
+    assert _isolevels(_view_path(tmp_path, second).read_text()) == [0.05]
+
+
+def test_concurrent_renders_do_not_embed_each_others_widgets(tmp_path, monkeypatch, result, cube_directory):
+    monkeypatch.chdir(tmp_path)
+    ready = threading.Barrier(2)
+
+    def render(level):
+        ready.wait(timeout=10)
+        iframe = render_cube_html(result, cube_directory, "MO 2", isolevel=level)
+        return _view_path(tmp_path, iframe).read_text(encoding="utf-8")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        rendered = list(pool.map(render, [0.02, 0.03]))
+
+    assert sorted(_isolevels(rendered[0])) == [-0.02, 0.02]
+    assert sorted(_isolevels(rendered[1])) == [-0.03, 0.03]
+
+
+def test_structure_views_are_isolated_and_use_the_configured_static_directory(tmp_path, water_mol):
+    static_directory = tmp_path / "runtime" / "static"
+    first = render_structure_html(water_mol, static_directory=static_directory)
+    second = render_structure_html(water_mol, static_directory=static_directory)
+    assert first != second
+    assert _view_path(tmp_path / "runtime", first).is_file()
+    assert _view_path(tmp_path / "runtime", second).is_file()
+
+
+def test_standalone_renders_do_not_leave_permanent_notebook_threads(
+        tmp_path, monkeypatch, water_mol, result, cube_directory):
+    from nglview.remote_thread import RemoteCallThread
+
+    monkeypatch.chdir(tmp_path)
+    before = {thread for thread in threading.enumerate() if isinstance(thread, RemoteCallThread)}
+    for _ in range(3):
+        render_structure_html(water_mol)
+        render_cube_html(result, cube_directory, "MO 2")
+    after = {thread for thread in threading.enumerate() if isinstance(thread, RemoteCallThread)}
+    assert after == before, "standalone renders leaked permanent threads holding their widgets alive"
